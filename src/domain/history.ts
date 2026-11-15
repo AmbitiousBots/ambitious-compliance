@@ -63,7 +63,7 @@ export const parseHistoryEntry = (raw: unknown): HistoryEntry => {
   const { seq, at, actor, reason, prevHash, hash } = raw;
   if (Object.keys(raw).sort().join(",") !== "actor,at,body,entity,entityId,hash,op,prevHash,reason,seq") throw invalid();
   if (typeof seq !== "number" || !isHistorySeq(seq) || typeof actor !== "string" || !isActor(actor)) throw invalid();
-  if (typeof reason !== "string" || reason.trim() === "") throw invalid();
+  if (typeof reason !== "string" || !reason.isWellFormed() || reason.trim() === "") throw invalid();
   if (typeof prevHash !== "string" || !isSha256Hex(prevHash) || typeof hash !== "string" || !isSha256Hex(hash)) throw invalid();
   const instant = parseInstant(at);
   if (instant !== at) throw invalid();

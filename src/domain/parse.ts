@@ -50,8 +50,8 @@ const fields = (raw: unknown, names: readonly string[]): Readonly<Record<string,
 };
 
 const text = (raw: unknown, field: string): string => {
-  if (typeof raw !== "string" || raw.trim() === "" || raw.length > 65_536) {
-    return invalid(field, "non-empty text of at most 65536 characters");
+  if (typeof raw !== "string" || !raw.isWellFormed() || raw.trim() === "" || raw.length > 65_536) {
+    return invalid(field, "non-empty, well-formed Unicode text of at most 65536 characters");
   }
   return raw;
 };

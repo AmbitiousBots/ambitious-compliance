@@ -29,6 +29,8 @@ Data lives in `$AMBITIOUS_HOME/compliance/compliance.sqlite`. `AMBITIOUS_HOME` d
 
 All record-writing commands require non-empty `actor` and `reason` fields alongside the fields below. Identifiers start with an ASCII letter or digit, contain only letters, digits, periods, underscores or hyphens, and have at most 128 characters. Times are ISO 8601 timestamps with a time zone and are normalized to UTC. Expiration must be after collection or attestation time.
 
+Text must be well-formed Unicode. Unpaired UTF-16 surrogates in JSON strings return `E_INPUT_SCHEMA` before the database is opened. Valid Unicode text is stored unchanged.
+
 | Command | Access | Input | Result in `data` |
 |---|---|---|---|
 | `program add` | write | `id`, `name`, `framework` | `entity`, `historySeq`, `hash` |

@@ -20,7 +20,7 @@ The kit packages are checksum-verified release archives in `vendor/`. Runtime re
 
 ## Changes and review
 
-Keep input parsing in `src/cli/`, pure behavior in `src/domain/`, SQLite access in `src/db/`, and any network adapters in `src/ai/`. This module currently makes no network calls. Follow [AGENTS.md](AGENTS.md) and the linked module contract in [README.md](README.md).
+Keep command-line argument parsing and envelopes in `src/cli/`, pure input validation and behavior in `src/domain/`, SQLite access in `src/db/`, and any network adapters in `src/ai/`. This module currently makes no network calls. Follow [AGENTS.md](AGENTS.md) and the linked module contract in [README.md](README.md).
 
 Start with types and API behavior, then run lint and dependency checks before the behavioral tests. A storage change must preserve earlier history values, transaction atomicity and projection replay. Released migrations are immutable; add a forward migration and a test that preserves existing rows. A change to ordering or transactions must also be checked against the TLA+ model.
 

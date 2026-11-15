@@ -195,6 +195,7 @@ export type YellowReason = {
 };
 
 export type RedReason =
+  | { readonly kind: "nothing_recorded" }
   | { readonly kind: "expired"; readonly support: Support }
   | { readonly kind: "not_yet_collected"; readonly evidenceId: EvidenceId; readonly collectedAt: Instant }
   | { readonly kind: "not_yet_attested"; readonly attestationId: AttestationId; readonly at: Instant };

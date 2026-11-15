@@ -33,11 +33,11 @@ The storage tests exercise real SQLite transactions and triggers. They check dup
 
 Model baseline commit: `5f4d37d7690c7fce71d2c9b25835bf7cd576a121`.
 
-Implementation checked against this model at commit `b5345adf8fa0cc2f7af3e7ce109e2274f2683057`. The complete release check passed, including 358,569 distinct states, all three expected counterexamples and all storage regressions.
+Implementation checked against this model at commit `d64de6f2b834efc39f0d76cfc612d1914831374f`. The complete release check passed, including 358,569 distinct states, all three expected counterexamples, all storage regressions and malformed-text rejection with valid Unicode round-trips.
 
 | Model action or invariant | Implementation |
 |---|---|
-| `Receive` | `src/cli/main.ts` write commands call `parseWrite` in `src/domain/parse.ts`. `HistoryChange` in `src/domain/types.ts` ties entity kind to identifier and body. |
+| `Receive` | `src/cli/main.ts` write commands call `parseWrite` in `src/domain/parse.ts`, which rejects malformed Unicode before opening the database. `HistoryChange` in `src/domain/types.ts` ties entity kind to identifier and body. |
 | `Begin`, `lock`, `head` | The vendored kit's `cli/run-cli` starts `BEGIN IMMEDIATE` before `src/db/store.ts` `append` calls `verifyDbChain` and reads the chain head. |
 | `AppendHistory`, `RowFor`, `Hash` | `append` inserts one new history row. `src/db/history.ts` `hashContent` hashes the previous hash and canonical content. |
 | `UpdateProjection` | `src/db/store.ts` `project` uses in-place projection upserts inside the same transaction. |

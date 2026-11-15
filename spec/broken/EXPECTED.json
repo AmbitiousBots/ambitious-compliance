@@ -1,0 +1,14 @@
+{
+  "DeleteAllowed": {
+    "invariant": "HistoryOnlyGrows",
+    "because": "Nothing stops a delete on the history table, so a row that a write already returned a receipt for disappears."
+  },
+  "ProjectionOutsideTransaction": {
+    "invariant": "ProjectionMatchesLastEntry",
+    "because": "The current-state row is written after the transaction that appended the history row has committed, so a reader can see the new history row next to the old current state."
+  },
+  "HeadReadBeforeTransaction": {
+    "invariant": "ChainVerifies",
+    "because": "A writer reads the last row's number and hash before it takes the write lock, so when another writer commits in between, its row is chained onto a row that is no longer the last."
+  }
+}

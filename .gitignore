@@ -2,3 +2,8 @@ node_modules/
 dist/
 spec/states/
 *_TTrace_*
+
+.work/
+
+dist/
+release/

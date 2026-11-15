@@ -1,0 +1,112 @@
+[
+  {
+    "id": "build",
+    "userVisible": "The module builds into one executable JavaScript file with no runtime package installation.",
+    "check": "npm run build"
+  },
+  {
+    "id": "selfcheck",
+    "userVisible": "Selfcheck creates and checks the database and reports its runtime, checksum, schema and integrity.",
+    "check": "node --test --test-name-pattern='selfcheck and discovery' test/cli.test.ts"
+  },
+  {
+    "id": "commands",
+    "userVisible": "Command discovery lists every command and whether it reads input or writes data.",
+    "check": "node --test --test-name-pattern='selfcheck and discovery' test/cli.test.ts"
+  },
+  {
+    "id": "program-add",
+    "userVisible": "A program persists with a history sequence and content hash.",
+    "check": "node --test --test-name-pattern='programs and controls persist' test/cli.test.ts"
+  },
+  {
+    "id": "control-add",
+    "userVisible": "A control belongs to its program and records a history receipt.",
+    "check": "node --test --test-name-pattern='programs and controls persist' test/cli.test.ts"
+  },
+  {
+    "id": "evidence-add",
+    "userVisible": "Recorded evidence supports a control only from its collection time until its expiration.",
+    "check": "node --test --test-name-pattern='evidence and attestations change|generated clocks never count' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "attest",
+    "userVisible": "A dated attestation can support a control and stops counting when it expires.",
+    "check": "node --test --test-name-pattern='evidence and attestations change|generated clocks never count' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "status",
+    "userVisible": "Status reports red without current support, yellow near expiration and green with longer support.",
+    "check": "node --test --test-name-pattern='evidence and attestations change|renewal threshold yellow' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "gaps",
+    "userVisible": "Gaps lists controls without current evidence, including controls supported only by an attestation.",
+    "check": "node --test --test-name-pattern='evidence and attestations change' test/cli.test.ts"
+  },
+  {
+    "id": "expiring",
+    "userVisible": "Expiring returns evidence and attestations within the requested horizon and suggests task inputs without creating tasks.",
+    "check": "node --test --test-name-pattern='expiry suggestions contain' test/cli.test.ts"
+  },
+  {
+    "id": "doc-record",
+    "userVisible": "A document revision records its Page identifier, version and hash while retaining earlier history.",
+    "check": "node --test --test-name-pattern='document checks report' test/cli.test.ts"
+  },
+  {
+    "id": "doc-check",
+    "userVisible": "A mismatched document hash returns E_DOC_CHANGED and leaves the recorded document unchanged.",
+    "check": "node --test --test-name-pattern='document checks report' test/cli.test.ts"
+  },
+  {
+    "id": "export",
+    "userVisible": "Export returns the program records, complete history and a chain head that can be checked independently.",
+    "check": "node --test --test-name-pattern='exported history verifies' test/cli.test.ts"
+  },
+  {
+    "id": "verify-chain",
+    "userVisible": "Chain verification checks the database or a piped export and reports the first changed history row.",
+    "check": "node --test --test-name-pattern='exported history verifies|raw-file edit reports' test/cli.test.ts test/storage.test.ts"
+  },
+  {
+    "id": "rebuild",
+    "userVisible": "Rebuild restores current records from history without changing that history.",
+    "check": "node --test --test-name-pattern='exported history verifies|rebuild restores' test/cli.test.ts test/storage.test.ts"
+  },
+  {
+    "id": "history",
+    "userVisible": "History remains append-only across repeated records, revisions, rejected SQL changes and concurrent writers.",
+    "check": "node --test test/storage.test.ts"
+  },
+  {
+    "id": "deterministic-analysis",
+    "userVisible": "Every analysis command repeats the same answer for fixed time and seed and leaves stored data unchanged.",
+    "check": "node --test --test-name-pattern='analysis returns identical|analysis needs a current' test/cli.test.ts"
+  },
+  {
+    "id": "input",
+    "userVisible": "Invalid input and ill-formed text are rejected before creation or mutation, valid Unicode survives storage and rebuild, and JSON input files behave like stdin.",
+    "check": "node --test --test-name-pattern='invalid input fails|ill-formed|valid Unicode' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "task-handoff",
+    "userVisible": "Suggested tasks use the documented add fields and stable keys; release acceptance is checked when the tasks release exists.",
+    "check": "node --test test/handoff.test.ts"
+  },
+  {
+    "id": "contract",
+    "userVisible": "The CLI follows the shared envelope, exit-code, determinism, private-path refusal and read-only rules.",
+    "check": "npm run contract"
+  },
+  {
+    "id": "standalone",
+    "userVisible": "Repository files are understandable without private planning documents or machine-specific paths.",
+    "check": "node scripts/check-standalone.mjs"
+  },
+  {
+    "id": "models",
+    "userVisible": "The two-writer history model preserves committed rows, projections and chain links, and broken variants fail.",
+    "check": "npm run tlc"
+  }
+]

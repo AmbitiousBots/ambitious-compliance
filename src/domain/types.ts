@@ -38,12 +38,12 @@ export const isControlId = (raw: string): raw is ControlId => isId(raw);
 export const isEvidenceId = (raw: string): raw is EvidenceId => isId(raw);
 export const isAttestationId = (raw: string): raw is AttestationId => isId(raw);
 export const isDocumentId = (raw: string): raw is DocumentId => isId(raw);
-export const isActor = (raw: string): raw is Actor => raw.trim() !== "" && raw.length <= ID_LIMIT;
+export const isActor = (raw: string): raw is Actor => raw.isWellFormed() && raw.trim() !== "" && raw.length <= ID_LIMIT;
 export const isInstant = (raw: string): raw is Instant => INSTANT_PATTERN.test(raw);
 export const isDays = (raw: number): raw is Days => Number.isSafeInteger(raw) && raw >= 1;
 export const isHistorySeq = (raw: number): raw is HistorySeq => Number.isSafeInteger(raw) && raw >= 1;
 export const isSha256Hex = (raw: string): raw is Sha256Hex => SHA256_PATTERN.test(raw);
-export const isPageId = (raw: string): raw is PageId => raw.trim() !== "" && raw.length <= ID_LIMIT;
+export const isPageId = (raw: string): raw is PageId => raw.isWellFormed() && raw.trim() !== "" && raw.length <= ID_LIMIT;
 export const isPageVersion = (raw: number): raw is PageVersion => Number.isSafeInteger(raw) && raw >= 1;
 
 export type PageRef = {
@@ -195,6 +195,7 @@ export type YellowReason = {
 };
 
 export type RedReason =
+  | { readonly kind: "nothing_recorded" }
   | { readonly kind: "expired"; readonly support: Support }
   | { readonly kind: "not_yet_collected"; readonly evidenceId: EvidenceId; readonly collectedAt: Instant }
   | { readonly kind: "not_yet_attested"; readonly attestationId: AttestationId; readonly at: Instant };

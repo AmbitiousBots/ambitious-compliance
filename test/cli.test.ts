@@ -210,3 +210,63 @@ test("invalid input fails before creation and input files match stdin", () => is
   const nonexistent = run(home, "status", { programId: "absent" }, [], 1);
   assert.equal(object(array(nonexistent.envelope.errors)[0]).code, "E_NOT_FOUND");
 }));
+
+test("ill-formed text is rejected before creation and cannot change existing history", () => isolated((home) => {
+  setup(home);
+  run(home, "doc record", document);
+  const before = run(home, "export", { programId: program.id }).stdout;
+  const database = join(home, "compliance", "compliance.sqlite");
+  const stored = readFileSync(database);
+  const fresh = join(home, "fresh");
+  for (const text of ["lone \ud800 surrogate", "lone \udc00 surrogate"]) {
+    const writes = [
+      ...["actor", "reason", "name"].map((field) => ({ command: "program add", input: { ...program, id: "new-program", [field]: text } })),
+      { command: "doc record", input: { ...document, page: { ...page, pageId: text } } },
+    ];
+    for (const { command, input } of writes) {
+      for (const target of [fresh, home]) {
+        const rejected = run(target, command, input, [], 1);
+        assert.equal(object(array(rejected.envelope.errors)[0]).code, "E_INPUT_SCHEMA");
+      }
+      assert.equal(existsSync(join(fresh, "compliance")), false);
+      assert.deepEqual(readFileSync(database), stored);
+      assert.equal(run(home, "export", { programId: program.id }).stdout, before);
+      assert.equal(run(home, "verify-chain").data.ok, true);
+    }
+  }
+  assert.equal(run(home, "evidence add", evidence).data.historySeq, 4);
+  assert.equal(run(home, "verify-chain").data.ok, true);
+}));
+
+test("valid Unicode text round-trips through history, projections and rebuild", () => isolated((home) => {
+  const text = "Review \ud83d\udcdd Ελληνικά 中文 \ufffd";
+  const metadata = { actor: text, reason: text };
+  const unicodePage = { pageId: text, version: 1, sha256: page.sha256 };
+  run(home, "program add", { ...program, name: text, framework: text, ...metadata });
+  run(home, "control add", { ...control, ref: text, title: text, owner: text, ...metadata });
+  run(home, "evidence add", { ...evidence, kind: text, summary: text, page: unicodePage, ...metadata });
+  run(home, "attest", { id: "attestation-a", controlId: control.id, by: text, statement: text, at: now, expiresAt: "2026-03-01T00:00:00Z", ...metadata });
+  run(home, "doc record", { ...document, title: text, page: unicodePage, ...metadata });
+  const before = run(home, "export", { programId: program.id });
+  const history = array(before.data.history).map(object);
+  const records = [
+    { table: "programs", fields: ["name", "framework"] },
+    { table: "controls", fields: ["ref", "title", "owner"] },
+    { table: "evidence", fields: ["kind", "summary"] },
+    { table: "attestations", fields: ["by", "statement"] },
+    { table: "documents", fields: ["title"] },
+  ];
+  for (const [index, { table, fields }] of records.entries()) {
+    const row = object(array(before.data[table])[0]);
+    const entry = object(history[index]);
+    assert.deepEqual(row, entry.body);
+    assert.equal(entry.actor, text);
+    assert.equal(entry.reason, text);
+    for (const field of fields) assert.equal(row[field], text);
+    if (table === "evidence" || table === "documents") assert.equal(object(row.page).pageId, text);
+  }
+  assert.equal(run(home, "verify-chain").data.ok, true);
+  assert.equal(run(join(home, "independent"), "verify-chain", before.stdout).data.ok, true);
+  run(home, "rebuild");
+  assert.equal(run(home, "export", { programId: program.id }).stdout, before.stdout);
+}));

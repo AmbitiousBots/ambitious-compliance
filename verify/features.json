@@ -86,8 +86,8 @@
   },
   {
     "id": "input",
-    "userVisible": "Invalid input is rejected before creation and JSON input files behave like stdin.",
-    "check": "node --test --test-name-pattern='invalid input fails' test/cli.test.ts"
+    "userVisible": "Invalid input and ill-formed text are rejected before creation or mutation, valid Unicode survives storage and rebuild, and JSON input files behave like stdin.",
+    "check": "node --test --test-name-pattern='invalid input fails|ill-formed|valid Unicode' test/cli.test.ts test/domain.test.ts"
   },
   {
     "id": "task-handoff",

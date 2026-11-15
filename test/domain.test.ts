@@ -3,8 +3,9 @@ import test from "node:test";
 import fc from "fast-check";
 import { Failure } from "@ambitious/kit/domain/failure";
 import { programExpiring, programGaps, programStatus } from "../src/domain/analysis.ts";
-import { parseAttestation, parseControl, parseEvidence, parseInstant, parseProgram } from "../src/domain/parse.ts";
-import type { Attestation, Control, Evidence, Projection } from "../src/domain/types.ts";
+import { parseHistoryEntry } from "../src/domain/history.ts";
+import { parseAttestation, parseControl, parseEvidence, parseInstant, parseProgram, parseWrite } from "../src/domain/parse.ts";
+import { isActor, isPageId, type Attestation, type Control, type EntityKind, type Evidence, type Projection } from "../src/domain/types.ts";
 
 const DAY_MS = 86_400_000;
 const program = parseProgram({ id: "program-1", name: "Example program", framework: "custom" });
@@ -141,4 +142,43 @@ test("analysis filters other programs and sorts controls by identifier", () => {
   assert.deepEqual(programStatus(state, program.id, instant(origin)).controls.map((item) => item.controlId), [control.id, laterControl.id]);
   assert.deepEqual(programGaps(state, program.id, instant(origin)).controls.map((item) => item.controlId), [control.id, laterControl.id]);
   assert.throws(() => programStatus(state, otherProgram.id, instant(origin)), (error: unknown) => error instanceof Failure && error.errors[0].code === "E_NOT_FOUND");
+});
+
+test("ill-formed text is rejected in every write field and page input form", () => {
+  const records = [
+    { entity: "program", input: program, fields: ["name", "framework"] },
+    { entity: "control", input: control, fields: ["ref", "title", "owner"] },
+    { entity: "evidence", input: evidence("record-1", origin, origin + DAY_MS), fields: ["kind", "summary"] },
+    { entity: "attestation", input: attestation("review-1", origin, origin + DAY_MS), fields: ["by", "statement"] },
+    { entity: "document", input: { id: "document-1", programId: program.id, title: "Procedure", page: { pageId: "page-1", version: 1, sha256: "a".repeat(64) } }, fields: ["title"] },
+  ] satisfies readonly { entity: EntityKind; input: object; fields: readonly string[] }[];
+  const invalid = (error: unknown) => error instanceof Failure && error.errors[0].code === "E_INPUT_SCHEMA";
+  for (const { entity, input, fields } of records) {
+    const valid = { ...input, actor: "operator", reason: "Routine review" };
+    assert.doesNotThrow(() => parseWrite(valid, entity));
+    for (const text of ["lone \ud800 surrogate", "lone \udc00 surrogate"]) {
+      for (const field of [...fields, "actor", "reason"]) {
+        assert.throws(() => parseWrite({ ...valid, [field]: text }, entity), invalid, `${entity}.${field}`);
+      }
+      if (entity === "evidence" || entity === "document") {
+        assert.throws(() => parseWrite({ ...valid, page: { pageId: text, version: 1, sha256: "a".repeat(64) } }, entity), invalid);
+        assert.throws(() => parseWrite({ ...valid, page: null, page_id: text, page_version: 1, page_sha256: "a".repeat(64) }, entity), invalid);
+      }
+    }
+  }
+});
+
+test("ill-formed history metadata cannot become typed history", () => {
+  const entry = {
+    seq: 1, at: instant(origin), actor: "operator", reason: "Routine review", entity: "program",
+    entityId: program.id, op: "create", body: program, prevHash: "0".repeat(64), hash: "a".repeat(64),
+  };
+  assert.doesNotThrow(() => parseHistoryEntry(entry));
+  for (const text of ["lone \ud800 surrogate", "lone \udc00 surrogate"]) {
+    assert.equal(isActor(text), false);
+    assert.equal(isPageId(text), false);
+    for (const field of ["actor", "reason"]) {
+      assert.throws(() => parseHistoryEntry({ ...entry, [field]: text }), (error: unknown) => error instanceof Failure && error.errors[0].code === "E_INPUT_SCHEMA");
+    }
+  }
 });

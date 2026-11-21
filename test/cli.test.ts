@@ -292,6 +292,15 @@ test("evidence weight: draft and decision are documented only, official is the o
     assert.equal(gaps.length, 1);
     assert.ok(array(gaps[0]?.reasons).some((reason) => JSON.stringify(reason) === JSON.stringify(documented)));
     assert.deepEqual(run(home, "expiring", { ...query, withinDays: 400 }).data.items, []);
+    for (const [now, kind] of [["2027-01-01T00:00:00Z", "documented_expired"], ["2025-01-01T00:00:00Z", "documented_future_dated"]] as const) {
+      for (const command of ["status", "gaps"]) {
+        const row = controls(run(home, command, query, ["--now", now]).data)[0];
+        const reasons = array(command === "status" ? object(row?.status).reasons : row?.reasons).map(object);
+        if (command === "status") assert.equal(object(row?.status).color, "red");
+        assert.ok(reasons.some((reason) => reason.evidenceId === id && reason.weight === weight));
+        assert.ok(reasons.every((reason) => reason.kind === kind));
+      }
+    }
   }
   run(home, "evidence add", { ...longEvidence, id: "implicit-a", kind: "draft" });
   assert.deepEqual(controls(run(home, "status", query).data)[0]?.status, {

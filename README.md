@@ -75,9 +75,13 @@ Every evidence row has a `weight`, separate from the free-text `kind` label:
 | green | `current` | Current official evidence or a current attestation, with the longest-lasting one expiring after the expires-soon window |
 | yellow | `expiring` | The longest-lasting current official evidence or attestation expires within the window; the reason carries the `withinDays` used |
 | red | `documented_not_official` | Current draft or decision evidence is on file. Something is documented, but it is not official evidence |
-| red | `expired`, `not_yet_collected`, `not_yet_attested`, `nothing_recorded` | No current official evidence or attestation |
+| red | `documented_expired` | Draft or decision evidence that is past its `expiresAt`. Only a draft or decision was on file; no official evidence expired |
+| red | `documented_future_dated` | Draft or decision evidence whose `collectedAt` is still in the future. No official evidence is scheduled |
+| red | `expired` | Official evidence or an attestation that is past its `expiresAt` |
+| red | `not_yet_collected`, `not_yet_attested` | Official evidence or an attestation dated in the future |
+| red | `nothing_recorded` | No evidence or attestation of any kind |
 
-Only current official evidence or a current attestation makes a control green or yellow. When draft or decision evidence is the only current record, the control stays red and each such row appears as a `documented_not_official` reason with its `evidenceId`, `weight` and `expiresAt`. Draft and decision rows never extend, shorten or start the expires-soon window. The shared status type reserves `unknown`, but these required controls always produce red, yellow or green.
+Only current official evidence or a current attestation makes a control green or yellow. When draft or decision evidence is the only current record, the control stays red and each such row appears as a `documented_not_official` reason with its `evidenceId`, `weight` and `expiresAt`. A draft or decision row that has lapsed or is dated in the future keeps its `weight` in a `documented_expired` or `documented_future_dated` reason, so `expired` and `not_yet_collected` always refer to official evidence (or, for `expired`, an attestation). Draft and decision rows never extend, shorten or start the expires-soon window. The shared status type reserves `unknown`, but these required controls always produce red, yellow or green.
 
 ### Expires-soon window
 
@@ -87,7 +91,7 @@ The window is `withinDays`, a non-negative integer number of days, and defaults 
 
 ## History and exports
 
-History rows contain the sequence, time, actor, reason, entity, operation, body and preceding hash. SHA-256 covers the preceding hash followed by canonical JSON of the row content. A write takes SQLite's immediate write lock before reading the chain head and commits the new history row and its projection together. SQL triggers reject history updates, deletes and insert collisions, including replacement and upsert attempts. Schema version 2 adds the collision guard to existing schema version 1 databases. Schema version 3 adds the evidence `weight` column; existing evidence keeps an empty weight, which is read as `official`, and no history row is rewritten.
+History rows contain the sequence, time, actor, reason, entity, operation, body and preceding hash. SHA-256 covers the preceding hash followed by canonical JSON of the row content. A write takes SQLite's immediate write lock before reading the chain head and commits the new history row and its projection together. SQL triggers reject history updates, deletes and insert collisions, including replacement and upsert attempts. Schema version 2 adds the collision guard to existing schema version 1 databases. Schema version 3 adds the evidence `weight` column; existing evidence keeps an empty weight, which is read as `official`, and no history row is rewritten. After installing 0.1.1 over a 0.1.0 database, run `selfcheck` once: read commands return `E_MIGRATION` until `selfcheck` or a write command has applied the migration.
 
 `rebuild` verifies the history before replaying projections and preserves the history itself. It cannot repair a damaged chain. `export` filters projections to the requested program but includes the complete module history, including other programs, because a filtered chain could not be verified. Treat an export as containing records from the whole database.
 

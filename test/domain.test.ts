@@ -212,9 +212,15 @@ test("current draft or decision evidence is documented, never support: red, stil
       assert.deepEqual(programGaps(state, program.id, instant(origin)).controls, [{ controlId: control.id, reasons: [documented] }]);
     }
     const lapsed = weighted(weight, "record-1", origin - 2 * DAY_MS, origin);
-    assert.deepEqual(programStatus(projection([lapsed]), program.id, instant(origin)).controls[0]?.status, {
-      color: "red", reasons: [{ kind: "expired", support: { kind: "evidence", evidenceId: lapsed.id, expiresAt: lapsed.expiresAt } }],
-    });
+    const future = weighted(weight, "record-2", origin + DAY_MS, origin + 2 * DAY_MS);
+    const reasons = [
+      { kind: "documented_expired", evidenceId: lapsed.id, weight, expiresAt: lapsed.expiresAt },
+      { kind: "documented_future_dated", evidenceId: future.id, weight, collectedAt: future.collectedAt },
+    ];
+    const state = projection([lapsed, future]);
+    assert.deepEqual(programStatus(state, program.id, instant(origin)).controls[0]?.status, { color: "red", reasons });
+    assert.deepEqual(programGaps(state, program.id, instant(origin)).controls, [{ controlId: control.id, reasons }]);
+    assert.deepEqual(programExpiring(state, program.id, instant(origin), 1_000).items, []);
   }
 });
 
@@ -227,8 +233,14 @@ test("generated clocks never let draft or decision evidence produce green or yel
     (weight, duration, offset, withinDays) => {
       const state = projection([weighted(weight, "generated", origin, origin + duration)]);
       const now = instant(origin + offset);
-      assert.equal(programStatus(state, program.id, now, withinDays).controls[0]?.status.color, "red");
-      assert.equal(programGaps(state, program.id, now).controls.length, 1);
+      const status = programStatus(state, program.id, now, withinDays).controls[0]?.status;
+      assert.equal(status?.color, "red");
+      const gaps = programGaps(state, program.id, now).controls;
+      assert.equal(gaps.length, 1);
+      for (const reason of [...status?.reasons ?? [], ...gaps[0]?.reasons ?? []]) {
+        assert.match(reason.kind, /^documented_/);
+        assert.equal("weight" in reason && reason.weight, weight);
+      }
       assert.equal(programExpiring(state, program.id, now, withinDays).items.length, 0);
     },
   ), { numRuns: 2_000, seed: 1309 });
@@ -252,7 +264,7 @@ test("with draft and official evidence together, only the official row decides t
   assert.deepEqual(programExpiring(yellowState, program.id, instant(origin)).items.map(({ id }) => id), [officialSoon.id]);
   const afterOfficial = programStatus(yellowState, program.id, officialSoon.expiresAt).controls[0]?.status;
   assert.equal(afterOfficial?.color, "red");
-  assert.deepEqual(afterOfficial?.reasons.map((reason) => reason.kind), ["documented_not_official", "expired", "expired"]);
+  assert.deepEqual(afterOfficial?.reasons.map((reason) => reason.kind), ["documented_not_official", "documented_expired", "expired"]);
   const attested = projection([soonDraft], [attestation("review", origin, origin + 200 * DAY_MS)]);
   assert.equal(programStatus(attested, program.id, instant(origin)).controls[0]?.status.color, "green");
   assert.deepEqual(programGaps(attested, program.id, instant(origin)).controls.map(({ reasons }) => reasons.map((reason) => reason.kind)), [["documented_not_official"]]);

@@ -24,11 +24,14 @@ const attestationSupport = (attestation: Attestation): Support => ({ kind: "atte
 const supportId = (support: Support): string => support.kind === "evidence" ? support.evidenceId : support.attestationId;
 
 const evidenceReasons = (evidence: readonly Evidence[], now: Instant): readonly RedReason[] => evidence.map((item): RedReason => {
-  if (item.collectedAt > now) return { kind: "not_yet_collected", evidenceId: item.id, collectedAt: item.collectedAt };
   const weight = evidenceWeight(item);
-  return weight !== "official" && now < item.expiresAt
-    ? { kind: "documented_not_official", evidenceId: item.id, weight, expiresAt: item.expiresAt }
-    : { kind: "expired", support: evidenceSupport(item) };
+  if (weight === "official") {
+    return item.collectedAt > now
+      ? { kind: "not_yet_collected", evidenceId: item.id, collectedAt: item.collectedAt }
+      : { kind: "expired", support: evidenceSupport(item) };
+  }
+  if (item.collectedAt > now) return { kind: "documented_future_dated", evidenceId: item.id, weight, collectedAt: item.collectedAt };
+  return { kind: now < item.expiresAt ? "documented_not_official" : "documented_expired", evidenceId: item.id, weight, expiresAt: item.expiresAt };
 });
 
 const nonEmptyReasons = (reasons: readonly RedReason[]): NonEmptyArray<RedReason> => {

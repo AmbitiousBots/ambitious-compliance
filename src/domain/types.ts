@@ -225,6 +225,18 @@ export type RedReason =
       readonly evidenceId: EvidenceId;
       readonly weight: Exclude<EvidenceWeight, "official">;
       readonly expiresAt: Instant;
+    }
+  | {
+      readonly kind: "documented_expired";
+      readonly evidenceId: EvidenceId;
+      readonly weight: Exclude<EvidenceWeight, "official">;
+      readonly expiresAt: Instant;
+    }
+  | {
+      readonly kind: "documented_future_dated";
+      readonly evidenceId: EvidenceId;
+      readonly weight: Exclude<EvidenceWeight, "official">;
+      readonly collectedAt: Instant;
     };
 
 export type UnknownReason = { readonly kind: "nothing_recorded" };

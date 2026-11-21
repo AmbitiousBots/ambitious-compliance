@@ -1,13 +1,15 @@
 import { failure } from "@ambitious/kit/domain/failure";
-import type {
-  Attestation, AttestationId, Control, ControlId, Evidence, EvidenceId, Instant,
-  NonEmptyArray, ProgramId, ProgramStatus, Projection, RedReason, Status, Support,
+import {
+  DEFAULT_WITHIN_DAYS, evidenceWeight,
+  type Attestation, type AttestationId, type Control, type ControlId, type Evidence, type EvidenceId, type Instant,
+  type NonEmptyArray, type ProgramId, type ProgramStatus, type Projection, type RedReason, type Status, type Support,
 } from "./types.ts";
 
 const DAY_MS = 86_400_000;
 const compareText = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
 
 export const isCurrentEvidence = (evidence: Evidence, now: Instant): boolean => evidence.collectedAt <= now && now < evidence.expiresAt;
+export const isCurrentOfficialEvidence = (evidence: Evidence, now: Instant): boolean => evidenceWeight(evidence) === "official" && isCurrentEvidence(evidence, now);
 export const isCurrentAttestation = (attestation: Attestation, now: Instant): boolean => attestation.at <= now && now < attestation.expiresAt;
 
 const controlsFor = (projection: Projection, programId: ProgramId): readonly Control[] => {
@@ -21,22 +23,25 @@ const evidenceSupport = (evidence: Evidence): Support => ({ kind: "evidence", ev
 const attestationSupport = (attestation: Attestation): Support => ({ kind: "attestation", attestationId: attestation.id, expiresAt: attestation.expiresAt });
 const supportId = (support: Support): string => support.kind === "evidence" ? support.evidenceId : support.attestationId;
 
-const evidenceReasons = (evidence: readonly Evidence[], now: Instant): readonly RedReason[] => evidence.map((item) => item.collectedAt > now
-  ? { kind: "not_yet_collected", evidenceId: item.id, collectedAt: item.collectedAt }
-  : { kind: "expired", support: evidenceSupport(item) });
+const evidenceReasons = (evidence: readonly Evidence[], now: Instant): readonly RedReason[] => evidence.map((item): RedReason => {
+  if (item.collectedAt > now) return { kind: "not_yet_collected", evidenceId: item.id, collectedAt: item.collectedAt };
+  const weight = evidenceWeight(item);
+  return weight !== "official" && now < item.expiresAt
+    ? { kind: "documented_not_official", evidenceId: item.id, weight, expiresAt: item.expiresAt }
+    : { kind: "expired", support: evidenceSupport(item) };
+});
 
 const nonEmptyReasons = (reasons: readonly RedReason[]): NonEmptyArray<RedReason> => {
   const [first, ...rest] = reasons;
   return first === undefined ? [{ kind: "nothing_recorded" }] : [first, ...rest];
 };
 
-const controlStatus = (control: Control, evidence: readonly Evidence[], attestations: readonly Attestation[], now: Instant): Status => {
+const controlStatus = (evidence: readonly Evidence[], attestations: readonly Attestation[], now: Instant, withinDays: number): Status => {
   const support = [
-    ...evidence.filter((item) => isCurrentEvidence(item, now)).map(evidenceSupport),
+    ...evidence.filter((item) => isCurrentOfficialEvidence(item, now)).map(evidenceSupport),
     ...attestations.filter((item) => isCurrentAttestation(item, now)).map(attestationSupport),
   ].sort((left, right) => compareText(right.expiresAt, left.expiresAt) || compareText(left.kind, right.kind) || compareText(supportId(left), supportId(right)))[0];
   if (support !== undefined) {
-    const withinDays = control.cadenceDays / 4;
     return Date.parse(support.expiresAt) - Date.parse(now) <= withinDays * DAY_MS
       ? { color: "yellow", reasons: [{ kind: "expiring", support, withinDays }] }
       : { color: "green", reasons: [{ kind: "current", support }] };
@@ -56,12 +61,13 @@ const evidenceFor = (projection: Projection, controlId: ControlId): readonly Evi
 const attestationsFor = (projection: Projection, controlId: ControlId): readonly Attestation[] => [...projection.attestations.values()]
   .filter((item) => item.controlId === controlId).sort((left, right) => compareText(left.id, right.id));
 
-export const programStatus = (projection: Projection, programId: ProgramId, now: Instant): ProgramStatus => ({
+export const programStatus = (projection: Projection, programId: ProgramId, now: Instant, withinDays: number = DEFAULT_WITHIN_DAYS): ProgramStatus => ({
   programId,
   now,
+  withinDays,
   controls: controlsFor(projection, programId).map((control) => ({
     controlId: control.id,
-    status: controlStatus(control, evidenceFor(projection, control.id), attestationsFor(projection, control.id), now),
+    status: controlStatus(evidenceFor(projection, control.id), attestationsFor(projection, control.id), now, withinDays),
   })),
 });
 
@@ -76,7 +82,7 @@ export const programGaps = (projection: Projection, programId: ProgramId, now: I
   now,
   controls: controlsFor(projection, programId).flatMap((control) => {
     const evidence = evidenceFor(projection, control.id);
-    return evidence.some((item) => isCurrentEvidence(item, now)) ? [] : [{ controlId: control.id, reasons: nonEmptyReasons(evidenceReasons(evidence, now)) }];
+    return evidence.some((item) => isCurrentOfficialEvidence(item, now)) ? [] : [{ controlId: control.id, reasons: nonEmptyReasons(evidenceReasons(evidence, now)) }];
   }),
 });
 
@@ -116,11 +122,11 @@ const suggestedTask = (kind: "evidence" | "attestation", id: EvidenceId | Attest
   idem_key: kind === "evidence" ? `compliance:${id}:${expiresAt}` : `compliance:attestation:${id}:${expiresAt}`,
 });
 
-export const programExpiring = (projection: Projection, programId: ProgramId, now: Instant, withinDays: number): ProgramExpiring => {
+export const programExpiring = (projection: Projection, programId: ProgramId, now: Instant, withinDays: number = DEFAULT_WITHIN_DAYS): ProgramExpiring => {
   const horizon = withinDays * DAY_MS;
   const expiresWithin = (expiresAt: Instant): boolean => Date.parse(expiresAt) - Date.parse(now) <= horizon;
   const items: ExpiringItem[] = controlsFor(projection, programId).flatMap((control): ExpiringItem[] => [
-    ...evidenceFor(projection, control.id).filter((item) => isCurrentEvidence(item, now) && expiresWithin(item.expiresAt)).map((item): ExpiringItem => ({
+    ...evidenceFor(projection, control.id).filter((item) => isCurrentOfficialEvidence(item, now) && expiresWithin(item.expiresAt)).map((item): ExpiringItem => ({
       kind: "evidence", id: item.id, controlId: control.id, expiresAt: item.expiresAt,
       task: suggestedTask("evidence", item.id, item.expiresAt, control),
     })),

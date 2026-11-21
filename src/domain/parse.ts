@@ -1,17 +1,22 @@
 import { failure } from "@ambitious/kit/domain/failure";
 import { isRecord } from "@ambitious/kit/domain/json";
 import {
-  isActor,
+  ACTOR_RULE,
+  DEFAULT_WITHIN_DAYS,
+  EVIDENCE_WEIGHTS,
+  isLegacyActor,
   isAttestationId,
   isControlId,
   isDays,
   isDocumentId,
   isEvidenceId,
+  isEvidenceWeight,
   isInstant,
   isPageId,
   isPageVersion,
   isProgramId,
   isSha256Hex,
+  isWriteActor,
   type Actor,
   type Attestation,
   type ComplianceDocument,
@@ -20,6 +25,7 @@ import {
   type EntityByKind,
   type EntityKind,
   type Evidence,
+  type EvidenceWeight,
   type Instant,
   type PageRef,
   type Program,
@@ -139,13 +145,19 @@ export const parseControl = (raw: unknown): Control => {
   };
 };
 
+const parseWeight = (raw: unknown): EvidenceWeight => {
+  if (typeof raw !== "string" || !isEvidenceWeight(raw)) return invalid("weight", `one of ${EVIDENCE_WEIGHTS.join(", ")}, or omit it to record official evidence`);
+  return raw;
+};
+
 export const parseEvidence = (raw: unknown): Evidence => {
-  const value = fields(raw, ["id", "controlId", "control_id", "kind", "summary", "collectedAt", "collected_at", "expiresAt", "expires_at", ...PAGE_FIELDS]);
+  const value = fields(raw, ["id", "controlId", "control_id", "kind", "weight", "summary", "collectedAt", "collected_at", "expiresAt", "expires_at", ...PAGE_FIELDS]);
   const collectedAt = parseInstant(alias(value, "collectedAt", "collected_at"), "collectedAt");
   return {
     id: brandedText(value.id, "id", isEvidenceId),
     controlId: brandedText(alias(value, "controlId", "control_id"), "controlId", isControlId),
     kind: text(value.kind, "kind"),
+    ...(value.weight === undefined || value.weight === null ? {} : { weight: parseWeight(value.weight) }),
     summary: text(value.summary, "summary"),
     page: pageValue(value),
     collectedAt,
@@ -159,7 +171,7 @@ export const parseAttestation = (raw: unknown): Attestation => {
   return {
     id: brandedText(value.id, "id", isAttestationId),
     controlId: brandedText(alias(value, "controlId", "control_id"), "controlId", isControlId),
-    by: brandedText(value.by, "by", isActor),
+    by: brandedText(value.by, "by", isLegacyActor),
     statement: text(value.statement, "statement"),
     at,
     expiresAt: expiration(alias(value, "expiresAt", "expires_at"), at),
@@ -178,13 +190,24 @@ export const parseDocument = (raw: unknown): ComplianceDocument => {
   };
 };
 
+export const parseNewEvidence = (raw: unknown): Evidence & { readonly weight: EvidenceWeight } => {
+  const evidence = parseEvidence(raw);
+  if (record(raw).weight === null) return invalid("weight", `one of ${EVIDENCE_WEIGHTS.join(", ")}, or omit it to record official evidence`);
+  return { ...evidence, weight: evidence.weight ?? "official" };
+};
+
+const parseActor = (raw: unknown): Actor => {
+  if (typeof raw !== "string" || !isWriteActor(raw)) return invalid("actor", ACTOR_RULE);
+  return raw;
+};
+
 export const parseWrite = (raw: unknown, entity: EntityKind): WriteInput => {
   const value = record(raw);
-  const metadata = { actor: brandedText(value.actor, "actor", isActor), reason: text(value.reason, "reason") };
+  const metadata = { actor: parseActor(value.actor), reason: text(value.reason, "reason") };
   switch (entity) {
     case "program": return { entity, body: parseProgram(raw), ...metadata };
     case "control": return { entity, body: parseControl(raw), ...metadata };
-    case "evidence": return { entity, body: parseEvidence(raw), ...metadata };
+    case "evidence": return { entity, body: parseNewEvidence(raw), ...metadata };
     case "attestation": return { entity, body: parseAttestation(raw), ...metadata };
     case "document": return { entity, body: parseDocument(raw), ...metadata };
   }
@@ -195,11 +218,12 @@ export const parseProgramQuery = (raw: unknown): { readonly programId: ProgramId
   return { programId: brandedText(alias(value, "programId", "program_id"), "programId", isProgramId) };
 };
 
-export const parseExpiringQuery = (raw: unknown): { readonly programId: ProgramId; readonly withinDays: number } => {
+export const parseWindowQuery = (raw: unknown): { readonly programId: ProgramId; readonly withinDays: number } => {
   const value = fields(raw, ["programId", "program_id", "withinDays", "within_days"]);
-  const withinDays = alias(value, "withinDays", "within_days");
+  const given = alias(value, "withinDays", "within_days");
+  const withinDays = given === undefined && value.withinDays !== null && value.within_days !== null ? DEFAULT_WITHIN_DAYS : given;
   if (typeof withinDays !== "number" || !Number.isSafeInteger(withinDays) || withinDays < 0) {
-    return invalid("withinDays", "a non-negative safe integer");
+    return invalid("withinDays", `a non-negative safe integer number of days, or omit it to use ${DEFAULT_WITHIN_DAYS}`);
   }
   return { programId: brandedText(alias(value, "programId", "program_id"), "programId", isProgramId), withinDays };
 };

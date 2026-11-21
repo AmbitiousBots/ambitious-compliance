@@ -8,7 +8,8 @@ import { migrate } from "@ambitious/kit/db/migrate";
 import { loadMigrations } from "@ambitious/kit/db/load-migrations";
 import { openDb, type Db } from "@ambitious/kit/db/open-db";
 import fc from "fast-check";
-import { parseHistoryEntry } from "../src/domain/history.ts";
+import { programExpiring, programGaps, programStatus } from "../src/domain/analysis.ts";
+import { canonical, parseHistoryEntry } from "../src/domain/history.ts";
 import { parseInstant, parseProgramQuery, parseWrite, type WriteInput } from "../src/domain/parse.ts";
 import { replay } from "../src/domain/replay.ts";
 import { verifyChain } from "../src/db/history.ts";
@@ -52,7 +53,7 @@ const put = (db: Db, input: WriteInput) => transaction(db, () => append(db, inpu
 
 test("migrations create every projection and preserve records when run again", async () => {
   await withDatabase((db) => {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 2);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 3);
     assert.equal(db.prepare("PRAGMA journal_mode").get()?.journal_mode, "wal");
     assert.equal(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys, 1);
     for (const input of [program, control, evidence, attestation, document()]) put(db, input);
@@ -69,10 +70,12 @@ test("the insert-guard migration protects existing history without changing its 
     assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
     put(db, program);
     const before = loadHistory(db);
-    assert.deepEqual(migrate(db, migrations), ["0002_protect_history_inserts"]);
+    assert.deepEqual(migrate(db, migrations.slice(0, 2)), ["0002_protect_history_inserts"]);
     assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 2);
     assert.deepEqual(loadHistory(db), before);
     assert.throws(() => db.exec("REPLACE INTO history SELECT * FROM history WHERE seq = 1"), /History cannot be replaced/);
+    assert.deepEqual(loadHistory(db), before);
+    assert.deepEqual(migrate(db, migrations), ["0003_add_evidence_weight"]);
     assert.deepEqual(loadHistory(db), before);
     put(db, control);
     assert.equal(loadHistory(db).length, 2);
@@ -280,5 +283,93 @@ test("concurrent writers serialize their head reads and commit matching projecti
     assert.equal(new Set(history.map(({ hash }) => hash)).size, 8);
     assert.equal(loadProjection(db).programs.size, 8);
     assert.deepEqual(loadProjection(db), replay(history));
+  });
+});
+
+const releasedHistory = [
+  {
+    seq: 1, at: "2026-01-01T00:00:00.000Z", actor: "operator", reason: "Start tracking", entity: "program", entityId: "program", op: "create",
+    body: { id: "program", name: "Example program", framework: "custom" },
+    prevHash: "0".repeat(64), hash: "81e78e5e521df466cdcc76aa1a4c138edb1a2d2250b708a0826bca96df9612ba",
+  },
+  {
+    seq: 2, at: "2026-01-01T00:00:00.000Z", actor: " operator ", reason: "Add a control", entity: "control", entityId: "control", op: "create",
+    body: { id: "control", programId: "program", ref: "C-1", title: "Review records", owner: "reviewer", cadenceDays: 28 },
+    prevHash: "81e78e5e521df466cdcc76aa1a4c138edb1a2d2250b708a0826bca96df9612ba", hash: "769f2d1871c16993c884fce397f5680f3318f7f5f9afcef127192634f0cc5ab5",
+  },
+  {
+    seq: 3, at: "2026-01-01T00:00:00.000Z", actor: "operator", reason: "Record a reviewed item", entity: "evidence", entityId: "evidence", op: "create",
+    body: { id: "evidence", controlId: "control", kind: "record", summary: "Reviewed record", page: null, collectedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-06-01T00:00:00.000Z" },
+    prevHash: "769f2d1871c16993c884fce397f5680f3318f7f5f9afcef127192634f0cc5ab5", hash: "63b7dbd6b6d29f2f6b1675deb613af3e5409c4b37980575442220f89887e86ac",
+  },
+] as const;
+
+const writeReleasedDatabase = (db: Db): void => {
+  const insert = db.prepare("INSERT INTO history (seq, at, actor, reason, entity, entity_id, op, body, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const row of releasedHistory) insert.run(row.seq, row.at, row.actor, row.reason, row.entity, row.entityId, row.op, canonical(row.body), row.prevHash, row.hash);
+  db.exec(`
+    INSERT INTO programs (id, name, framework) VALUES ('program', 'Example program', 'custom');
+    INSERT INTO controls (id, program_id, ref, title, owner, cadence_days) VALUES ('control', 'program', 'C-1', 'Review records', 'reviewer', 28);
+    INSERT INTO evidence (id, control_id, kind, summary, collected_at, expires_at) VALUES ('evidence', 'control', 'record', 'Reviewed record', '2026-01-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z');
+  `);
+};
+
+test("a version 0.1.0 database migrates and rebuilds with its history unchanged and its evidence treated as official", async () => {
+  await withDatabase((db) => {
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 2);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM pragma_table_info('evidence') WHERE name = 'weight'").get()?.n, 0);
+    writeReleasedDatabase(db);
+    const history = loadHistory(db);
+    const rawRows = db.prepare("SELECT * FROM history ORDER BY seq").all();
+    const releasedHead = { kind: "entry", seq: 3, hash: releasedHistory[2].hash };
+    assert.deepEqual(verifyChain(history, releasedHead), { ok: true, head: releasedHead });
+
+    assert.deepEqual(migrate(db, migrations), ["0003_add_evidence_weight"]);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 3);
+    assert.deepEqual(db.prepare("SELECT * FROM history ORDER BY seq").all(), rawRows);
+    assert.deepEqual(verifyDbChain(db, releasedHead), { ok: true, head: releasedHead });
+    assert.equal(db.prepare("SELECT weight FROM evidence WHERE id = 'evidence'").get()?.weight, null);
+
+    const programId = parseProgramQuery({ programId: "program" }).programId;
+    const at = parseInstant("2026-02-01T00:00:00Z");
+    const check = () => {
+      const projection = loadProjection(db);
+      assert.deepEqual(projection, replay(loadHistory(db).map(parseHistoryEntry)));
+      const stored = [...projection.evidence.values()][0];
+      assert.deepEqual(stored, releasedHistory[2].body);
+      assert.equal(stored !== undefined && "weight" in stored, false);
+      assert.deepEqual(programStatus(projection, programId, at).controls.map(({ status }) => [status.color, status.reasons[0].kind]), [["green", "current"]]);
+      assert.deepEqual(programGaps(projection, programId, at).controls, []);
+      assert.deepEqual(programExpiring(projection, programId, at, 150).items.map(({ id }) => id), ["evidence"]);
+    };
+    check();
+    assert.deepEqual(transaction(db, () => rebuild(db)), { history: 3, programs: 1, controls: 1, evidence: 1, attestations: 0, documents: 0 });
+    check();
+    assert.deepEqual(db.prepare("SELECT * FROM history ORDER BY seq").all(), rawRows);
+    assert.deepEqual(exportProgram(db, programId).evidence, [releasedHistory[2].body]);
+
+    const draft = parseWrite({ id: "draft", controlId: "control", kind: "record", weight: "draft", summary: "Draft record", collectedAt: now, expiresAt: "2026-12-01T00:00:00Z", ...metadata }, "evidence");
+    assert.equal(put(db, draft).historySeq, 4);
+    assert.equal(put(db, parseWrite({ id: "implicit", controlId: "control", kind: "record", summary: "Later record", collectedAt: now, expiresAt: "2026-12-01T00:00:00Z", ...metadata }, "evidence")).historySeq, 5);
+    assert.deepEqual(db.prepare("SELECT id, weight FROM evidence ORDER BY id").all().map((row) => [row.id, row.weight]), [["draft", "draft"], ["evidence", null], ["implicit", "official"]]);
+    assert.deepEqual(loadHistory(db).slice(0, 3), history);
+    assert.equal(verifyDbChain(db).ok, true);
+    assert.deepEqual(loadProjection(db), replay(loadHistory(db).map(parseHistoryEntry)));
+    const beforeRebuild = loadProjection(db);
+    transaction(db, () => rebuild(db));
+    assert.deepEqual(loadProjection(db), beforeRebuild);
+  }, migrations.slice(0, 2));
+});
+
+test("the weight column accepts only the three weights and a rejected evidence projection rolls its history row back", async () => {
+  await withDatabase((db) => {
+    for (const input of [program, control]) put(db, input);
+    assert.throws(() => db.exec("INSERT INTO evidence (id, control_id, kind, weight, summary, collected_at, expires_at) VALUES ('other', 'control', 'record', 'final', 'Summary', '2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z')"), /CHECK constraint failed/);
+    const before = loadHistory(db);
+    db.exec("CREATE TRIGGER reject_evidence BEFORE INSERT ON evidence BEGIN SELECT RAISE(ABORT, 'Test projection failure'); END;");
+    assert.throws(() => put(db, parseWrite({ id: "draft", controlId: "control", kind: "record", weight: "draft", summary: "Draft record", collectedAt: now, expiresAt: "2026-12-01T00:00:00Z", ...metadata }, "evidence")), /Test projection failure/);
+    assert.deepEqual(loadHistory(db), before);
+    assert.equal(loadProjection(db).evidence.size, 0);
+    assert.equal(verifyDbChain(db).ok, true);
   });
 });

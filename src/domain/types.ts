@@ -38,7 +38,18 @@ export const isControlId = (raw: string): raw is ControlId => isId(raw);
 export const isEvidenceId = (raw: string): raw is EvidenceId => isId(raw);
 export const isAttestationId = (raw: string): raw is AttestationId => isId(raw);
 export const isDocumentId = (raw: string): raw is DocumentId => isId(raw);
-export const isActor = (raw: string): raw is Actor => raw.isWellFormed() && raw.trim() !== "" && raw.length <= ID_LIMIT;
+export const ACTOR_LIMIT = 200;
+export const ACTOR_RULE = `1 to ${ACTOR_LIMIT} Unicode characters with no control characters (including newlines) and no leading or trailing whitespace; spaces inside the value are allowed`;
+
+const CONTROL_CHARACTER = /\p{Cc}|[\u2028\u2029]/u;
+
+export const isWriteActor = (raw: string): raw is Actor =>
+  raw.isWellFormed() && raw !== "" && raw === raw.trim() && !CONTROL_CHARACTER.test(raw) && raw.length <= ACTOR_LIMIT * 2 && Array.from(raw).length <= ACTOR_LIMIT;
+
+export const isLegacyActor = (raw: string): raw is Actor => raw.isWellFormed() && raw.trim() !== "" && raw.length <= ID_LIMIT;
+
+// WHY: history committed under the earlier actor rule must keep verifying, so a recorded actor may satisfy either rule.
+export const isRecordedActor = (raw: string): raw is Actor => isWriteActor(raw) || isLegacyActor(raw);
 export const isInstant = (raw: string): raw is Instant => INSTANT_PATTERN.test(raw);
 export const isDays = (raw: number): raw is Days => Number.isSafeInteger(raw) && raw >= 1;
 export const isHistorySeq = (raw: number): raw is HistorySeq => Number.isSafeInteger(raw) && raw >= 1;
@@ -67,15 +78,25 @@ export type Control = {
   readonly cadenceDays: Days;
 };
 
+export const EVIDENCE_WEIGHTS = ["official", "draft", "decision"] as const;
+
+export type EvidenceWeight = (typeof EVIDENCE_WEIGHTS)[number];
+
+export const isEvidenceWeight = (raw: string): raw is EvidenceWeight => EVIDENCE_WEIGHTS.some((weight) => weight === raw);
+
 export type Evidence = {
   readonly id: EvidenceId;
   readonly controlId: ControlId;
   readonly kind: string;
+  // WHY: optional because bodies hashed before the field existed must keep their exact content; evidenceWeight reads absent as official.
+  readonly weight?: EvidenceWeight;
   readonly summary: string;
   readonly page: PageRef | null;
   readonly collectedAt: Instant;
   readonly expiresAt: Instant;
 };
+
+export const evidenceWeight = (evidence: Evidence): EvidenceWeight => evidence.weight ?? "official";
 
 export type Attestation = {
   readonly id: AttestationId;
@@ -198,7 +219,13 @@ export type RedReason =
   | { readonly kind: "nothing_recorded" }
   | { readonly kind: "expired"; readonly support: Support }
   | { readonly kind: "not_yet_collected"; readonly evidenceId: EvidenceId; readonly collectedAt: Instant }
-  | { readonly kind: "not_yet_attested"; readonly attestationId: AttestationId; readonly at: Instant };
+  | { readonly kind: "not_yet_attested"; readonly attestationId: AttestationId; readonly at: Instant }
+  | {
+      readonly kind: "documented_not_official";
+      readonly evidenceId: EvidenceId;
+      readonly weight: Exclude<EvidenceWeight, "official">;
+      readonly expiresAt: Instant;
+    };
 
 export type UnknownReason = { readonly kind: "nothing_recorded" };
 
@@ -224,8 +251,11 @@ export type ControlStatus = {
   readonly status: Status;
 };
 
+export const DEFAULT_WITHIN_DAYS = 30;
+
 export type ProgramStatus = {
   readonly programId: ProgramId;
   readonly now: Instant;
+  readonly withinDays: number;
   readonly controls: readonly ControlStatus[];
 };

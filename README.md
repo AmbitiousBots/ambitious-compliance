@@ -27,7 +27,7 @@ Data lives in `$AMBITIOUS_HOME/compliance/compliance.sqlite`. `AMBITIOUS_HOME` d
 
 ## Commands
 
-All record-writing commands require non-empty `actor` and `reason` fields alongside the fields below. Identifiers start with an ASCII letter or digit, contain only letters, digits, periods, underscores or hyphens, and have at most 128 characters. Times are ISO 8601 timestamps with a time zone and are normalized to UTC. Expiration must be after collection or attestation time.
+All record-writing commands require `actor` and `reason` fields alongside the fields below. `actor` is 1 to 200 Unicode characters with no control characters (including newlines) and no leading or trailing whitespace; spaces inside the value are allowed. A value that breaks the rule is rejected with `E_INPUT_SCHEMA` and a hint that states the rule; nothing is trimmed. `reason` is non-empty text. Identifiers start with an ASCII letter or digit, contain only letters, digits, periods, underscores or hyphens, and have at most 128 characters. Times are ISO 8601 timestamps with a time zone and are normalized to UTC. Expiration must be after collection or attestation time.
 
 Record text must be well-formed Unicode. Unpaired UTF-16 surrogates in record input return `E_INPUT_SCHEMA` before the database is opened. Valid Unicode text is stored unchanged.
 
@@ -35,12 +35,12 @@ Record text must be well-formed Unicode. Unpaired UTF-16 surrogates in record in
 |---|---|---|---|
 | `program add` | write | `id`, `name`, `framework` | `entity`, `historySeq`, `hash` |
 | `control add` | write | `id`, `programId`, `ref`, `title`, `owner`, positive integer `cadenceDays` | Write receipt |
-| `evidence add` | write | `id`, `controlId`, `kind`, `summary`, `collectedAt`, `expiresAt`, optional `page` | Write receipt |
+| `evidence add` | write | `id`, `controlId`, `kind`, `summary`, `collectedAt`, `expiresAt`, optional `weight` (`official`, `draft` or `decision`; default `official`), optional `page` | Write receipt |
 | `attest` | write | `id`, `controlId`, `by`, `statement`, `at`, `expiresAt` | Write receipt |
 | `doc record` | write | `id`, `programId`, `title`, `page` | Write receipt; an existing document gets a new revision |
-| `status` | read | `programId` | Control colors and reasons at the supplied clock |
-| `gaps` | read | `programId` | Controls with no current evidence, even when an attestation supports their status |
-| `expiring` | read | `programId`, non-negative integer `withinDays` | Expiring evidence and attestations with suggested task payloads |
+| `status` | read | `programId`, optional non-negative integer `withinDays` (default 30) | Control colors and reasons at the supplied clock, and the `withinDays` window used |
+| `gaps` | read | `programId` | Controls with no current official evidence, even when an attestation supports their status or a draft or decision is on file |
+| `expiring` | read | `programId`, optional non-negative integer `withinDays` (default 30) | Expiring official evidence and attestations with suggested task payloads |
 | `verify-chain` | read | `{}`, an export's `data`, or a complete export envelope | `ok`, plus `head` or `firstBadSeq` |
 | `doc check` | read | `docId`, `sha256` | A match or `E_DOC_CHANGED`; never changes the record |
 | `export` | read | `programId` | Program projections, complete history and `chainHead` |
@@ -52,13 +52,42 @@ Analysis opens an existing database read-only and never migrates it. Run `selfch
 
 Record inputs also accept the corresponding database field names, such as `program_id`, `control_id`, `cadence_days`, `collected_at` and `expires_at`. A Page reference is `{"pageId":"page-example","version":1,"sha256":"<64 lowercase hexadecimal characters>"}`. The stored form uses `pageVersion` and `pageSha256`, which are also accepted as input. Flat `page_id`, `page_version` and `page_sha256` fields are accepted together instead of `page`. The module stores these references; it does not fetch, render or modify documents.
 
-Duplicate adds return `E_EXISTS`. Repeating `doc record` appends another history row, including when its contents are unchanged. All existing controls are required. Evidence counts only during `collectedAt <= now < expiresAt`; attestations count only during `at <= now < expiresAt`. A control is red without current support, yellow when its longest-lasting current support expires within one quarter of its cadence, and green otherwise. The shared status type reserves `unknown`, but these required controls always produce red, yellow or green. Attestations are the only manual support; there is no free-standing status override.
+Duplicate adds return `E_EXISTS`. Repeating `doc record` appends another history row, including when its contents are unchanged. All existing controls are required. Evidence is current during `collectedAt <= now < expiresAt`; attestations are current during `at <= now < expiresAt`. Attestations are the only manual support; there is no free-standing status override.
 
-`expiring` returns only current records expiring within the requested horizon. Each `items[].task` can be passed to `ambitious-tasks add` and includes `title`, `list`, `due`, `labels`, `done_when` and `idem_key`. Evidence keys are `compliance:<id>:<normalized expiry>`; attestation keys add `attestation:` before the identifier to avoid collisions. The module does not invoke tasks or write its database.
+### Evidence weight
+
+Every evidence row has a `weight`, separate from the free-text `kind` label:
+
+| `weight` | Meaning | Supports a control | Removes the control from `gaps` | Listed by `expiring` |
+|---|---|---|---|---|
+| `official` | The record itself | Yes, while current | Yes, while current | Yes |
+| `draft` | A working version that is not final | No | No | No |
+| `decision` | A recorded decision or intention | No | No | No |
+
+`evidence add` without `weight` stores `official`, as version 0.1.0 did. Evidence recorded by version 0.1.0 has no `weight` in its history body or in `export`; it is read as `official`, and its history rows and hashes are unchanged. `kind` never affects weight: evidence with `kind` set to `draft` and no `weight` is official. Draft and decision rows are ordinary history rows: they are hash-chained, exported and replayed like every other row.
+
+### Status colors
+
+`status` reports what is on record at the supplied clock. A color is not an opinion on whether a control's underlying requirement is satisfied; the module records the register and nothing more.
+
+| Color | Reason `kind` | What is on record |
+|---|---|---|
+| green | `current` | Current official evidence or a current attestation, with the longest-lasting one expiring after the expires-soon window |
+| yellow | `expiring` | The longest-lasting current official evidence or attestation expires within the window; the reason carries the `withinDays` used |
+| red | `documented_not_official` | Current draft or decision evidence is on file. Something is documented, but it is not official evidence |
+| red | `expired`, `not_yet_collected`, `not_yet_attested`, `nothing_recorded` | No current official evidence or attestation |
+
+Only current official evidence or a current attestation makes a control green or yellow. When draft or decision evidence is the only current record, the control stays red and each such row appears as a `documented_not_official` reason with its `evidenceId`, `weight` and `expiresAt`. Draft and decision rows never extend, shorten or start the expires-soon window. The shared status type reserves `unknown`, but these required controls always produce red, yellow or green.
+
+### Expires-soon window
+
+The window is `withinDays`, a non-negative integer number of days, and defaults to 30 when omitted. It applies to `status` (yellow when `expiresAt - now` is at most `withinDays` days) and to `expiring`. Both commands return the `withinDays` they used, and each yellow `expiring` reason repeats it. Send `{"programId":"example","withinDays":90}` to use another window; `0` means nothing is yellow. A value that is not a non-negative safe integer returns `E_INPUT_SCHEMA`. A control's `cadenceDays` is recorded but does not change the window.
+
+`expiring` returns only current official evidence and current attestations expiring within the window. Each `items[].task` can be passed to `ambitious-tasks add` and includes `title`, `list`, `due`, `labels`, `done_when` and `idem_key`. Evidence keys are `compliance:<id>:<normalized expiry>`; attestation keys add `attestation:` before the identifier to avoid collisions. The module does not invoke tasks or write its database.
 
 ## History and exports
 
-History rows contain the sequence, time, actor, reason, entity, operation, body and preceding hash. SHA-256 covers the preceding hash followed by canonical JSON of the row content. A write takes SQLite's immediate write lock before reading the chain head and commits the new history row and its projection together. SQL triggers reject history updates, deletes and insert collisions, including replacement and upsert attempts. Schema version 2 adds the collision guard to existing schema version 1 databases.
+History rows contain the sequence, time, actor, reason, entity, operation, body and preceding hash. SHA-256 covers the preceding hash followed by canonical JSON of the row content. A write takes SQLite's immediate write lock before reading the chain head and commits the new history row and its projection together. SQL triggers reject history updates, deletes and insert collisions, including replacement and upsert attempts. Schema version 2 adds the collision guard to existing schema version 1 databases. Schema version 3 adds the evidence `weight` column; existing evidence keeps an empty weight, which is read as `official`, and no history row is rewritten.
 
 `rebuild` verifies the history before replaying projections and preserves the history itself. It cannot repair a damaged chain. `export` filters projections to the requested program but includes the complete module history, including other programs, because a filtered chain could not be verified. Treat an export as containing records from the whole database.
 
@@ -86,7 +115,7 @@ mise exec -- verify/run
 
 `release:check` runs type checking, lint, standalone documentation checks, dependency boundaries, unit and property tests, the module contract checks, TLA+/TLC, feature verification and the release build. `verify/run` checks the features in [verify/features.json](verify/features.json) using temporary data directories. It never needs real organization records.
 
-`npm run release:build` writes `release/ambitious-compliance-0.1.0.mjs` and `release/SHA256SUMS`. The bundled file runs with Node 24 alone. Development dependencies and migrations are embedded at build time; users do not run `npm install`. The kit's checksum-verifying installer can install that release. Release files are not committed.
+`npm run release:build` writes `release/ambitious-compliance-0.1.1.mjs` and `release/SHA256SUMS`. The bundled file runs with Node 24 alone. Development dependencies and migrations are embedded at build time; users do not run `npm install`. The kit's checksum-verifying installer can install that release. Release files are not committed.
 
 The optional tasks integration check uses a checksum-verified `tasks-v0.1.0` release when available. It reports a clear skip when that release has not been published, while local payload shape tests still run. See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for contributing and responsible disclosure.
 

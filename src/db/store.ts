@@ -82,7 +82,7 @@ const project = (db: Db, change: HistoryChange): void => {
     }
     case "evidence": {
       const value = change.body;
-      db.prepare("INSERT INTO evidence (id, control_id, kind, summary, page_id, page_version, page_sha256, collected_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET control_id=excluded.control_id, kind=excluded.kind, summary=excluded.summary, page_id=excluded.page_id, page_version=excluded.page_version, page_sha256=excluded.page_sha256, collected_at=excluded.collected_at, expires_at=excluded.expires_at").run(value.id, value.controlId, value.kind, value.summary, value.page?.pageId ?? null, value.page?.pageVersion ?? null, value.page?.pageSha256 ?? null, value.collectedAt, value.expiresAt);
+      db.prepare("INSERT INTO evidence (id, control_id, kind, weight, summary, page_id, page_version, page_sha256, collected_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET control_id=excluded.control_id, kind=excluded.kind, weight=excluded.weight, summary=excluded.summary, page_id=excluded.page_id, page_version=excluded.page_version, page_sha256=excluded.page_sha256, collected_at=excluded.collected_at, expires_at=excluded.expires_at").run(value.id, value.controlId, value.kind, value.weight ?? null, value.summary, value.page?.pageId ?? null, value.page?.pageVersion ?? null, value.page?.pageSha256 ?? null, value.collectedAt, value.expiresAt);
       break;
     }
     case "attestation": {

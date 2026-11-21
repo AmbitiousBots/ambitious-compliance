@@ -26,7 +26,7 @@
   },
   {
     "id": "evidence-add",
-    "userVisible": "Recorded evidence supports a control only from its collection time until its expiration.",
+    "userVisible": "Recorded evidence is current only from its collection time until its expiration, and only official evidence supports a control.",
     "check": "node --test --test-name-pattern='evidence and attestations change|generated clocks never count' test/cli.test.ts test/domain.test.ts"
   },
   {
@@ -36,18 +36,38 @@
   },
   {
     "id": "status",
-    "userVisible": "Status reports red without current support, yellow near expiration and green with longer support.",
-    "check": "node --test --test-name-pattern='evidence and attestations change|renewal threshold yellow' test/cli.test.ts test/domain.test.ts"
+    "userVisible": "Status reports red without current official evidence or a current attestation, yellow when that support expires within the window, and green with longer support.",
+    "check": "node --test --test-name-pattern='evidence and attestations change|renewal threshold yellow|expires-soon window' test/cli.test.ts test/domain.test.ts"
   },
   {
     "id": "gaps",
-    "userVisible": "Gaps lists controls without current evidence, including controls supported only by an attestation.",
-    "check": "node --test --test-name-pattern='evidence and attestations change' test/cli.test.ts"
+    "userVisible": "Gaps lists controls without current official evidence, including controls supported only by an attestation or documented only by a draft or decision.",
+    "check": "node --test --test-name-pattern='evidence and attestations change|evidence weight' test/cli.test.ts"
   },
   {
     "id": "expiring",
-    "userVisible": "Expiring returns evidence and attestations within the requested horizon and suggests task inputs without creating tasks.",
-    "check": "node --test --test-name-pattern='expiry suggestions contain' test/cli.test.ts"
+    "userVisible": "Expiring returns official evidence and attestations within the requested window and suggests task inputs without creating tasks.",
+    "check": "node --test --test-name-pattern='expiry suggestions contain|expires-soon window' test/cli.test.ts"
+  },
+  {
+    "id": "evidence-weight",
+    "userVisible": "Evidence weight is official, draft or decision; draft and decision are reported as documented, never turn a control green or yellow, stay in gaps and stay out of expiring; evidence without a weight is official, including in a version 0.1.0 database.",
+    "check": "node --test --test-name-pattern='evidence weight|mixed weights|draft or decision|draft and official|weight is omitted|version 0.1.0 database|weight column|weight is written or absent' test/cli.test.ts test/domain.test.ts test/storage.test.ts"
+  },
+  {
+    "id": "expiring-window",
+    "userVisible": "The expires-soon window defaults to 30 days, can be set with withinDays on status and expiring, is reported in the result, and rejects invalid values.",
+    "check": "node --test --test-name-pattern='expires-soon window|expiring months away' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "actor",
+    "userVisible": "The actor on every write is 1 to 200 characters with no control characters and no leading or trailing whitespace; other values are rejected with a hint that states the rule, and nothing is trimmed.",
+    "check": "node --test --test-name-pattern='actor rule|earlier actor rule' test/cli.test.ts test/domain.test.ts"
+  },
+  {
+    "id": "no-claim",
+    "userVisible": "Documentation and command output describe what is on record and never state that a requirement is satisfied.",
+    "check": "node --test --test-name-pattern='no claim' test/cli.test.ts"
   },
   {
     "id": "doc-record",

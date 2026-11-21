@@ -5,7 +5,7 @@ import { verifyChain } from "../db/history.ts";
 import { append, exportProgram, loadProjection, rebuild, verifyDbChain } from "../db/store.ts";
 import { programExpiring, programGaps, programStatus } from "../domain/analysis.ts";
 import { checkDocument, parseChainInput } from "../domain/check.ts";
-import { parseDocumentQuery, parseExpiringQuery, parseInstant, parseProgramQuery, parseWrite } from "../domain/parse.ts";
+import { parseDocumentQuery, parseInstant, parseProgramQuery, parseWindowQuery, parseWrite } from "../domain/parse.ts";
 import type { EntityKind } from "../domain/types.ts";
 
 const add = (entity: EntityKind): Command => writeCommand({
@@ -34,15 +34,15 @@ await runCli({
     attest: add("attestation"),
     "doc record": add("document"),
     status: readCommand({
-      input: parseProgramQuery,
-      run: ({ db, input, clock }) => programStatus(loadProjection(db), input.programId, parseInstant(clock.now().toISOString())),
+      input: parseWindowQuery,
+      run: ({ db, input, clock }) => programStatus(loadProjection(db), input.programId, parseInstant(clock.now().toISOString()), input.withinDays),
     }),
     gaps: readCommand({
       input: parseProgramQuery,
       run: ({ db, input, clock }) => programGaps(loadProjection(db), input.programId, parseInstant(clock.now().toISOString())),
     }),
     expiring: readCommand({
-      input: parseExpiringQuery,
+      input: parseWindowQuery,
       run: ({ db, input, clock }) => programExpiring(loadProjection(db), input.programId, parseInstant(clock.now().toISOString()), input.withinDays),
     }),
     "verify-chain": chainCommand,

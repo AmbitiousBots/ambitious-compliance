@@ -4,8 +4,8 @@ import fc from "fast-check";
 import { Failure } from "@ambitious/kit/domain/failure";
 import { programExpiring, programGaps, programStatus } from "../src/domain/analysis.ts";
 import { parseHistoryEntry } from "../src/domain/history.ts";
-import { parseAttestation, parseControl, parseEvidence, parseInstant, parseProgram, parseWrite } from "../src/domain/parse.ts";
-import { isActor, isPageId, type Attestation, type Control, type EntityKind, type Evidence, type Projection } from "../src/domain/types.ts";
+import { parseAttestation, parseControl, parseEvidence, parseInstant, parseProgram, parseWindowQuery, parseWrite } from "../src/domain/parse.ts";
+import { ACTOR_RULE, DEFAULT_WITHIN_DAYS, isLegacyActor, isPageId, isRecordedActor, isWriteActor, type Attestation, type Control, type EntityKind, type Evidence, type Projection } from "../src/domain/types.ts";
 
 const DAY_MS = 86_400_000;
 const program = parseProgram({ id: "program-1", name: "Example program", framework: "custom" });
@@ -16,6 +16,12 @@ const origin = Date.parse("2026-01-01T00:00:00.000Z");
 const evidence = (id: string, start: number, end: number, controlId = control.id): Evidence => parseEvidence({
   id, controlId, kind: "record", summary: "Recorded review", collectedAt: instant(start), expiresAt: instant(end),
 });
+
+const weighted = (weight: string, id: string, start: number, end: number): Evidence => parseEvidence({
+  id, controlId: control.id, kind: "record", weight, summary: "Recorded review", collectedAt: instant(start), expiresAt: instant(end),
+});
+
+const inputError = (error: unknown): boolean => error instanceof Failure && error.errors[0].code === "E_INPUT_SCHEMA";
 
 const attestation = (id: string, start: number, end: number, controlId = control.id): Attestation => parseAttestation({
   id, controlId, by: "reviewer", statement: "Review completed", at: instant(start), expiresAt: instant(end),
@@ -30,12 +36,12 @@ const projection = (items: readonly Evidence[] = [], attestations: readonly Atte
 });
 
 test("status includes collection time, excludes expiration time, and marks the renewal threshold yellow", () => {
-  const state = projection([evidence("record-1", origin, origin + 28 * DAY_MS)]);
-  const colors = [-1, 0, 21 * DAY_MS - 1, 21 * DAY_MS, 28 * DAY_MS - 1, 28 * DAY_MS].map((offset) =>
+  const state = projection([evidence("record-1", origin, origin + 60 * DAY_MS)]);
+  const colors = [-1, 0, 30 * DAY_MS - 1, 30 * DAY_MS, 60 * DAY_MS - 1, 60 * DAY_MS].map((offset) =>
     programStatus(state, program.id, instant(origin + offset)).controls[0]?.status.color);
   assert.deepEqual(colors, ["red", "green", "green", "yellow", "yellow", "red"]);
   assert.equal(programGaps(state, program.id, instant(origin)).controls.length, 0);
-  assert.equal(programGaps(state, program.id, instant(origin + 28 * DAY_MS)).controls.length, 1);
+  assert.equal(programGaps(state, program.id, instant(origin + 60 * DAY_MS)).controls.length, 1);
 });
 
 test("every required control with no current support is red with a reason", () => {
@@ -54,7 +60,7 @@ test("every required control with no current support is red with a reason", () =
 });
 
 test("a current attestation supports status until expiration while an evidence gap remains", () => {
-  const item = attestation("review-1", origin, origin + 28 * DAY_MS);
+  const item = attestation("review-1", origin, origin + 60 * DAY_MS);
   const state = projection([], [item]);
   assert.equal(programStatus(state, program.id, instant(origin - 1)).controls[0]?.status.color, "red");
   assert.equal(programStatus(state, program.id, instant(origin)).controls[0]?.status.color, "green");
@@ -86,7 +92,7 @@ test("generated clocks never count expired or future evidence", () => {
       const state = projection([item]);
       const status = programStatus(state, program.id, instant(now)).controls[0]?.status.color;
       const current = start <= now && now < end;
-      const expected = !current ? "red" : end - now <= 7 * DAY_MS ? "yellow" : "green";
+      const expected = !current ? "red" : end - now <= DEFAULT_WITHIN_DAYS * DAY_MS ? "yellow" : "green";
       assert.equal(status, expected);
       assert.equal(programGaps(state, program.id, instant(now)).controls.length, current ? 0 : 1);
     },
@@ -102,7 +108,7 @@ test("generated clocks never count expired or future attestations", () => {
       const end = start + duration;
       const now = start + offset;
       const state = projection([], [attestation("generated", start, end)]);
-      const expected = now < start || now >= end ? "red" : end - now <= 7 * DAY_MS ? "yellow" : "green";
+      const expected = now < start || now >= end ? "red" : end - now <= DEFAULT_WITHIN_DAYS * DAY_MS ? "yellow" : "green";
       assert.equal(programStatus(state, program.id, instant(now)).controls[0]?.status.color, expected);
       assert.equal(programGaps(state, program.id, instant(now)).controls.length, 1);
     },
@@ -175,10 +181,186 @@ test("ill-formed history metadata cannot become typed history", () => {
   };
   assert.doesNotThrow(() => parseHistoryEntry(entry));
   for (const text of ["lone \ud800 surrogate", "lone \udc00 surrogate"]) {
-    assert.equal(isActor(text), false);
+    assert.equal(isLegacyActor(text), false);
     assert.equal(isPageId(text), false);
     for (const field of ["actor", "reason"]) {
       assert.throws(() => parseHistoryEntry({ ...entry, [field]: text }), (error: unknown) => error instanceof Failure && error.errors[0].code === "E_INPUT_SCHEMA");
     }
   }
+});
+
+test("official current evidence is green and leaves no gap, whether its weight is written or absent", () => {
+  for (const item of [weighted("official", "record-1", origin, origin + 90 * DAY_MS), evidence("record-1", origin, origin + 90 * DAY_MS)]) {
+    const state = projection([item]);
+    assert.deepEqual(programStatus(state, program.id, instant(origin)).controls[0]?.status, {
+      color: "green", reasons: [{ kind: "current", support: { kind: "evidence", evidenceId: item.id, expiresAt: item.expiresAt } }],
+    });
+    assert.deepEqual(programGaps(state, program.id, instant(origin)).controls, []);
+  }
+});
+
+test("current draft or decision evidence is documented, never support: red, still a gap, and outside the renewal clock", () => {
+  for (const weight of ["draft", "decision"] as const) {
+    for (const days of [1, 30, 90, 400]) {
+      const item = weighted(weight, "record-1", origin, origin + days * DAY_MS);
+      const state = projection([item]);
+      const documented = { kind: "documented_not_official", evidenceId: item.id, weight, expiresAt: item.expiresAt };
+      for (const withinDays of [0, 30, 1_000]) {
+        assert.deepEqual(programStatus(state, program.id, instant(origin), withinDays).controls[0]?.status, { color: "red", reasons: [documented] });
+        assert.deepEqual(programExpiring(state, program.id, instant(origin), withinDays).items, []);
+      }
+      assert.deepEqual(programGaps(state, program.id, instant(origin)).controls, [{ controlId: control.id, reasons: [documented] }]);
+    }
+    const lapsed = weighted(weight, "record-1", origin - 2 * DAY_MS, origin);
+    const future = weighted(weight, "record-2", origin + DAY_MS, origin + 2 * DAY_MS);
+    const reasons = [
+      { kind: "documented_expired", evidenceId: lapsed.id, weight, expiresAt: lapsed.expiresAt },
+      { kind: "documented_future_dated", evidenceId: future.id, weight, collectedAt: future.collectedAt },
+    ];
+    const state = projection([lapsed, future]);
+    assert.deepEqual(programStatus(state, program.id, instant(origin)).controls[0]?.status, { color: "red", reasons });
+    assert.deepEqual(programGaps(state, program.id, instant(origin)).controls, [{ controlId: control.id, reasons }]);
+    assert.deepEqual(programExpiring(state, program.id, instant(origin), 1_000).items, []);
+  }
+});
+
+test("generated clocks never let draft or decision evidence produce green or yellow or leave the gap list", () => {
+  fc.assert(fc.property(
+    fc.constantFrom("draft", "decision"),
+    fc.integer({ min: 1, max: 400 * DAY_MS }),
+    fc.integer({ min: -10 * DAY_MS, max: 410 * DAY_MS }),
+    fc.integer({ min: 0, max: 1_000 }),
+    (weight, duration, offset, withinDays) => {
+      const state = projection([weighted(weight, "generated", origin, origin + duration)]);
+      const now = instant(origin + offset);
+      const status = programStatus(state, program.id, now, withinDays).controls[0]?.status;
+      assert.equal(status?.color, "red");
+      const gaps = programGaps(state, program.id, now).controls;
+      assert.equal(gaps.length, 1);
+      for (const reason of [...status?.reasons ?? [], ...gaps[0]?.reasons ?? []]) {
+        assert.match(reason.kind, /^documented_/);
+        assert.equal("weight" in reason && reason.weight, weight);
+      }
+      assert.equal(programExpiring(state, program.id, now, withinDays).items.length, 0);
+    },
+  ), { numRuns: 2_000, seed: 1309 });
+});
+
+test("with draft and official evidence together, only the official row decides the color and the renewal clock", () => {
+  const soonDraft = weighted("draft", "draft-soon", origin, origin + 5 * DAY_MS);
+  const lateDecision = weighted("decision", "decision-late", origin, origin + 400 * DAY_MS);
+  const official = weighted("official", "official", origin, origin + 200 * DAY_MS);
+  const officialSoon = weighted("official", "official", origin, origin + 10 * DAY_MS);
+  const greenState = projection([soonDraft, lateDecision, official]);
+  assert.deepEqual(programStatus(greenState, program.id, instant(origin)).controls[0]?.status, {
+    color: "green", reasons: [{ kind: "current", support: { kind: "evidence", evidenceId: official.id, expiresAt: official.expiresAt } }],
+  });
+  assert.deepEqual(programGaps(greenState, program.id, instant(origin)).controls, []);
+  assert.deepEqual(programExpiring(greenState, program.id, instant(origin)).items, []);
+  const yellowState = projection([soonDraft, lateDecision, officialSoon]);
+  assert.deepEqual(programStatus(yellowState, program.id, instant(origin)).controls[0]?.status, {
+    color: "yellow", reasons: [{ kind: "expiring", support: { kind: "evidence", evidenceId: officialSoon.id, expiresAt: officialSoon.expiresAt }, withinDays: 30 }],
+  });
+  assert.deepEqual(programExpiring(yellowState, program.id, instant(origin)).items.map(({ id }) => id), [officialSoon.id]);
+  const afterOfficial = programStatus(yellowState, program.id, officialSoon.expiresAt).controls[0]?.status;
+  assert.equal(afterOfficial?.color, "red");
+  assert.deepEqual(afterOfficial?.reasons.map((reason) => reason.kind), ["documented_not_official", "documented_expired", "expired"]);
+  const attested = projection([soonDraft], [attestation("review", origin, origin + 200 * DAY_MS)]);
+  assert.equal(programStatus(attested, program.id, instant(origin)).controls[0]?.status.color, "green");
+  assert.deepEqual(programGaps(attested, program.id, instant(origin)).controls.map(({ reasons }) => reasons.map((reason) => reason.kind)), [["documented_not_official"]]);
+});
+
+test("the expires-soon window defaults to 30 days, can be set by the caller, and is reported back", () => {
+  assert.equal(DEFAULT_WITHIN_DAYS, 30);
+  const item = evidence("record-1", origin, origin + 45 * DAY_MS);
+  const state = projection([item], [attestation("review", origin, origin + 45 * DAY_MS)]);
+  const support = { kind: "attestation", attestationId: "review", expiresAt: item.expiresAt };
+  const byDefault = programStatus(state, program.id, instant(origin));
+  assert.equal(byDefault.withinDays, 30);
+  assert.deepEqual(byDefault.controls[0]?.status, { color: "green", reasons: [{ kind: "current", support }] });
+  assert.equal(programStatus(state, program.id, instant(origin + 15 * DAY_MS - 1)).controls[0]?.status.color, "green");
+  assert.deepEqual(programStatus(state, program.id, instant(origin + 15 * DAY_MS)).controls[0]?.status, { color: "yellow", reasons: [{ kind: "expiring", support, withinDays: 30 }] });
+  const widened = programStatus(state, program.id, instant(origin), 45);
+  assert.equal(widened.withinDays, 45);
+  assert.deepEqual(widened.controls[0]?.status, { color: "yellow", reasons: [{ kind: "expiring", support, withinDays: 45 }] });
+  assert.equal(programStatus(state, program.id, instant(origin), 44).controls[0]?.status.color, "green");
+  assert.equal(programStatus(state, program.id, instant(origin + 44 * DAY_MS), 0).controls[0]?.status.color, "green");
+  assert.equal(programExpiring(state, program.id, instant(origin)).withinDays, 30);
+  assert.equal(programExpiring(state, program.id, instant(origin)).items.length, 0);
+  assert.equal(programExpiring(state, program.id, instant(origin + 15 * DAY_MS)).items.length, 2);
+  assert.deepEqual(parseWindowQuery({ programId: program.id }), { programId: program.id, withinDays: 30 });
+  assert.deepEqual(parseWindowQuery({ program_id: program.id, within_days: 0 }), { programId: program.id, withinDays: 0 });
+  for (const withinDays of [-1, 1.5, "30", null, Number.MAX_SAFE_INTEGER + 1, true]) {
+    assert.throws(() => parseWindowQuery({ programId: program.id, withinDays }), inputError, String(withinDays));
+  }
+});
+
+test("official evidence expiring months away is green, not yellow, under the default window", () => {
+  const now = parseInstant("2026-11-22T02:50:00.000Z");
+  const item = parseEvidence({ id: "record-1", controlId: control.id, kind: "record", weight: "official", summary: "Recorded review", collectedAt: "2026-11-01T00:00:00Z", expiresAt: "2027-02-15T08:00:00.000Z" });
+  const state = projection([item]);
+  const support = { kind: "evidence", evidenceId: item.id, expiresAt: "2027-02-15T08:00:00.000Z" };
+  assert.deepEqual(programStatus(state, program.id, now), {
+    programId: program.id, now, withinDays: 30, controls: [{ controlId: control.id, status: { color: "green", reasons: [{ kind: "current", support }] } }],
+  });
+  assert.equal(programStatus(state, program.id, now, 85).controls[0]?.status.color, "green");
+  for (const withinDays of [86, 90]) {
+    assert.deepEqual(programStatus(state, program.id, now, withinDays).controls[0]?.status, { color: "yellow", reasons: [{ kind: "expiring", support, withinDays }] });
+  }
+  assert.deepEqual(programExpiring(state, program.id, now).items, []);
+  assert.equal(programExpiring(state, program.id, now, 90).items.length, 1);
+});
+
+test("a new evidence write stores official when weight is omitted, keeps a named weight, and rejects any other value", () => {
+  const input = { id: "record-1", controlId: control.id, kind: "official", summary: "Recorded review", collectedAt: instant(origin), expiresAt: instant(origin + DAY_MS), actor: "operator", reason: "Routine review" };
+  const body = (raw: object) => {
+    const write = parseWrite(raw, "evidence");
+    assert.equal(write.entity, "evidence");
+    return write.entity === "evidence" ? write.body : null;
+  };
+  assert.equal(body(input)?.weight, "official");
+  assert.equal(body({ ...input, kind: "draft" })?.weight, "official");
+  for (const weight of ["official", "draft", "decision"]) assert.equal(body({ ...input, weight })?.weight, weight);
+  for (const weight of ["Official", "final", "", " draft", 1, true, null, ["draft"]]) {
+    assert.throws(() => parseWrite({ ...input, weight }, "evidence"), (error: unknown) => inputError(error) && error instanceof Failure && /official, draft, decision/.test(error.errors[0].hint), String(weight));
+  }
+  assert.equal("weight" in evidence("record-1", origin, origin + DAY_MS), false);
+  assert.throws(() => parseWrite({ ...program, weight: "draft", actor: "operator", reason: "Routine review" }, "program"), inputError);
+});
+
+test("the write actor rule accepts internal spaces and rejects padding, control characters and more than 200 characters", () => {
+  const write = (actor: unknown) => parseWrite({ ...program, actor, reason: "Routine review" }, "program");
+  for (const actor of ["operator", "Office Manager", "a", "Ελληνικά 中文 \ud83d\udcdd", "x".repeat(200), "\ud83d\udcdd".repeat(200), "a  b"]) {
+    assert.equal(write(actor).actor, actor);
+    assert.equal(isWriteActor(actor), true);
+  }
+  const rejected = ["", " ", "\t", "   ", " operator", "operator ", "\toperator", "operator\n", "\u00a0operator", "operator\u3000", "\ufeffoperator",
+    "first\nsecond", "first\r\nsecond", "tab\there", "nul\u0000", "escape\u001b", "delete\u007f", "c1\u0085", "line\u2028separator", "paragraph\u2029separator",
+    "x".repeat(201), "\ud83d\udcdd".repeat(201), "lone \ud800 surrogate", 7, null, undefined, ["operator"]];
+  for (const actor of rejected) {
+    assert.throws(() => write(actor), (error: unknown) => {
+      assert.ok(error instanceof Failure);
+      assert.equal(error.errors[0].code, "E_INPUT_SCHEMA");
+      assert.equal(error.errors[0].message, "The actor field is not valid.");
+      assert.equal(error.errors[0].hint, `Provide ${ACTOR_RULE} for actor.`);
+      return true;
+    }, JSON.stringify(actor));
+    if (typeof actor === "string") assert.equal(isWriteActor(actor), false);
+  }
+  assert.match(ACTOR_RULE, /^1 to 200 Unicode characters with no control characters \(including newlines\) and no leading or trailing whitespace; spaces inside the value are allowed$/);
+  for (const entity of ["control", "evidence", "attestation", "document"] as const) {
+    assert.throws(() => parseWrite({ actor: " operator", reason: "Routine review" }, entity), inputError);
+  }
+});
+
+test("history recorded under the earlier actor rule still parses, while reason keeps its own rule", () => {
+  const entry = {
+    seq: 1, at: instant(origin), actor: " operator ", reason: " padded\nreason ", entity: "program",
+    entityId: program.id, op: "create", body: program, prevHash: "0".repeat(64), hash: "a".repeat(64),
+  };
+  assert.equal(parseHistoryEntry(entry).actor, " operator ");
+  assert.equal(parseHistoryEntry({ ...entry, actor: "x".repeat(200) }).actor.length, 200);
+  assert.equal(isRecordedActor("x".repeat(201)), false);
+  assert.throws(() => parseHistoryEntry({ ...entry, actor: "   " }), inputError);
+  assert.equal(parseWrite({ ...program, actor: "operator", reason: " padded\nreason " }, "program").reason, " padded\nreason ");
 });

@@ -2,8 +2,8 @@ import { failure } from "@ambitious/kit/domain/failure";
 import { isRecord, type JsonValue } from "@ambitious/kit/domain/json";
 import { parseAttestation, parseControl, parseDocument, parseEvidence, parseInstant, parseProgram } from "./parse.ts";
 import {
-  EMPTY_CHAIN_HEAD, GENESIS_PREV_HASH, isActor, isAttestationId, isControlId, isDocumentId,
-  isEvidenceId, isHistorySeq, isProgramId, isSha256Hex,
+  EMPTY_CHAIN_HEAD, GENESIS_PREV_HASH, isAttestationId, isControlId, isDocumentId,
+  isEvidenceId, isHistorySeq, isProgramId, isRecordedActor, isSha256Hex,
   type ChainHead, type HistoryChange, type HistoryEntry, type HistorySeq,
 } from "./types.ts";
 
@@ -62,7 +62,7 @@ export const parseHistoryEntry = (raw: unknown): HistoryEntry => {
   if (!isRecord(raw)) throw invalid();
   const { seq, at, actor, reason, prevHash, hash } = raw;
   if (Object.keys(raw).sort().join(",") !== "actor,at,body,entity,entityId,hash,op,prevHash,reason,seq") throw invalid();
-  if (typeof seq !== "number" || !isHistorySeq(seq) || typeof actor !== "string" || !isActor(actor)) throw invalid();
+  if (typeof seq !== "number" || !isHistorySeq(seq) || typeof actor !== "string" || !isRecordedActor(actor)) throw invalid();
   if (typeof reason !== "string" || !reason.isWellFormed() || reason.trim() === "") throw invalid();
   if (typeof prevHash !== "string" || !isSha256Hex(prevHash) || typeof hash !== "string" || !isSha256Hex(hash)) throw invalid();
   const instant = parseInstant(at);

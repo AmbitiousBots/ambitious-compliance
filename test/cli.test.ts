@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -185,7 +185,7 @@ test("selfcheck and discovery expose a ready database and every command", () => 
   assert.match(String(object(selfcheck.runtime).version), /^24\./);
   assert.equal(object(selfcheck.binary).sha256, createHash("sha256").update(readFileSync(binary)).digest("hex"));
   assert.equal(object(selfcheck.db).integrityCheck, "ok");
-  assert.equal(object(selfcheck.db).userVersion, 2);
+  assert.equal(object(selfcheck.db).userVersion, 3);
   assert.equal(existsSync(join(home, "compliance", "compliance.sqlite")), true);
   const discovery = run(home, "commands").data;
   const commands = array(discovery.commands).map(object);
@@ -269,4 +269,159 @@ test("valid Unicode text round-trips through history, projections and rebuild", 
   assert.equal(run(join(home, "independent"), "verify-chain", before.stdout).data.ok, true);
   run(home, "rebuild");
   assert.equal(run(home, "export", { programId: program.id }).stdout, before.stdout);
+}));
+
+const controls = (data: Readonly<Record<string, unknown>>) => array(data.controls).map(object);
+const firstError = (envelope: Readonly<Record<string, unknown>>) => object(array(envelope.errors)[0]);
+const query = { programId: program.id };
+const longEvidence = { ...evidence, expiresAt: "2026-12-01T00:00:00Z" };
+
+test("evidence weight: draft and decision are documented only, official is the only evidence that supports a control", () => isolated((home) => {
+  setup(home);
+  for (const weight of ["draft", "decision"]) {
+    const id = `${weight}-a`;
+    run(home, "evidence add", { ...longEvidence, id, weight, kind: "official" });
+    const documented = { kind: "documented_not_official", evidenceId: id, weight, expiresAt: "2026-12-01T00:00:00.000Z" };
+    for (const input of [query, { ...query, withinDays: 0 }, { ...query, withinDays: 400 }]) {
+      const status = object(controls(run(home, "status", input).data)[0]?.status);
+      assert.equal(status.color, "red");
+      assert.ok(array(status.reasons).some((reason) => JSON.stringify(reason) === JSON.stringify(documented)));
+      assert.ok(array(status.reasons).every((reason) => object(reason).kind === "documented_not_official"));
+    }
+    const gaps = controls(run(home, "gaps", query).data);
+    assert.equal(gaps.length, 1);
+    assert.ok(array(gaps[0]?.reasons).some((reason) => JSON.stringify(reason) === JSON.stringify(documented)));
+    assert.deepEqual(run(home, "expiring", { ...query, withinDays: 400 }).data.items, []);
+    for (const [now, kind] of [["2027-01-01T00:00:00Z", "documented_expired"], ["2025-01-01T00:00:00Z", "documented_future_dated"]] as const) {
+      for (const command of ["status", "gaps"]) {
+        const row = controls(run(home, command, query, ["--now", now]).data)[0];
+        const reasons = array(command === "status" ? object(row?.status).reasons : row?.reasons).map(object);
+        if (command === "status") assert.equal(object(row?.status).color, "red");
+        assert.ok(reasons.some((reason) => reason.evidenceId === id && reason.weight === weight));
+        assert.ok(reasons.every((reason) => reason.kind === kind));
+      }
+    }
+  }
+  run(home, "evidence add", { ...longEvidence, id: "implicit-a", kind: "draft" });
+  assert.deepEqual(controls(run(home, "status", query).data)[0]?.status, {
+    color: "green", reasons: [{ kind: "current", support: { kind: "evidence", evidenceId: "implicit-a", expiresAt: "2026-12-01T00:00:00.000Z" } }],
+  });
+  assert.deepEqual(run(home, "gaps", query).data.controls, []);
+  assert.deepEqual(array(run(home, "expiring", { ...query, withinDays: 400 }).data.items).map((item) => object(item).id), ["implicit-a"]);
+  const exported = run(home, "export", query);
+  assert.deepEqual(array(exported.data.evidence).map((item) => [object(item).id, object(item).kind, object(item).weight]), [["decision-a", "official", "decision"], ["draft-a", "official", "draft"], ["implicit-a", "draft", "official"]]);
+  assert.deepEqual(array(exported.data.history).slice(2).map((entry) => object(object(entry).body).weight), ["draft", "decision", "official"]);
+  assert.equal(run(join(home, "independent"), "verify-chain", exported.stdout).data.ok, true);
+  run(home, "rebuild");
+  assert.equal(run(home, "export", query).stdout, exported.stdout);
+  const before = readFileSync(join(home, "compliance", "compliance.sqlite"));
+  for (const weight of ["final", "Draft", "", 1, null, ["draft"]]) {
+    const rejected = run(home, "evidence add", { ...longEvidence, id: "rejected-a", weight }, [], 1);
+    assert.equal(firstError(rejected.envelope).code, "E_INPUT_SCHEMA");
+    assert.match(String(firstError(rejected.envelope).hint), /official, draft, decision/);
+  }
+  assert.deepEqual(readFileSync(join(home, "compliance", "compliance.sqlite")), before);
+}));
+
+test("mixed weights: a draft that expires soon never turns a control with longer official evidence yellow", () => isolated((home) => {
+  setup(home);
+  run(home, "evidence add", { ...evidence, id: "draft-soon", weight: "draft" });
+  run(home, "evidence add", { ...longEvidence, id: "official-long", weight: "official" });
+  const status = run(home, "status", query).data;
+  assert.equal(status.withinDays, 30);
+  assert.deepEqual(controls(status)[0]?.status, {
+    color: "green", reasons: [{ kind: "current", support: { kind: "evidence", evidenceId: "official-long", expiresAt: "2026-12-01T00:00:00.000Z" } }],
+  });
+  assert.deepEqual(run(home, "expiring", query).data.items, []);
+  assert.deepEqual(run(home, "gaps", query).data.controls, []);
+}));
+
+test("expires-soon window: status and expiring default to 30 days, accept withinDays and report the window they used", () => isolated((home) => {
+  setup(home);
+  run(home, "evidence add", { ...evidence, weight: "official", collectedAt: "2026-11-01T00:00:00Z", expiresAt: "2027-02-15T08:00:00.000Z" });
+  const at = ["--now", "2026-11-22T02:50:00.000Z"];
+  const support = { kind: "evidence", evidenceId: evidence.id, expiresAt: "2027-02-15T08:00:00.000Z" };
+  const byDefault = run(home, "status", query, at);
+  assert.equal(object(byDefault.envelope.meta).now, "2026-11-22T02:50:00.000Z");
+  assert.equal(byDefault.data.withinDays, 30);
+  assert.deepEqual(controls(byDefault.data)[0]?.status, { color: "green", reasons: [{ kind: "current", support }] });
+  assert.equal(run(home, "status", { ...query, withinDays: 30 }, at).stdout, byDefault.stdout);
+  assert.equal(statusColor(run(home, "status", { ...query, withinDays: 85 }, at).data), "green");
+  for (const input of [{ ...query, withinDays: 90 }, { program_id: program.id, within_days: 90 }]) {
+    const widened = run(home, "status", input, at).data;
+    assert.equal(widened.withinDays, 90);
+    assert.deepEqual(controls(widened)[0]?.status, { color: "yellow", reasons: [{ kind: "expiring", support, withinDays: 90 }] });
+  }
+  const expiring = run(home, "expiring", query, at).data;
+  assert.equal(expiring.withinDays, 30);
+  assert.deepEqual(expiring.items, []);
+  assert.equal(array(run(home, "expiring", { ...query, withinDays: 90 }, at).data.items).length, 1);
+  const soon = run(home, "status", query, ["--now", "2027-01-20T00:00:00Z"]).data;
+  assert.deepEqual(controls(soon)[0]?.status, { color: "yellow", reasons: [{ kind: "expiring", support, withinDays: 30 }] });
+  assert.equal(array(run(home, "expiring", query, ["--now", "2027-01-20T00:00:00Z"]).data.items).length, 1);
+  for (const command of ["status", "expiring"]) {
+    for (const withinDays of [-1, 1.5, "30", null, true, 1e300]) {
+      const rejected = run(home, command, { ...query, withinDays }, at, 1);
+      assert.equal(firstError(rejected.envelope).code, "E_INPUT_SCHEMA", `${command} ${String(withinDays)}`);
+      assert.match(String(firstError(rejected.envelope).hint), /non-negative safe integer number of days, or omit it to use 30/);
+    }
+    assert.equal(firstError(run(home, command, { ...query, withinDays: 30, within_days: 31 }, at, 1).envelope).code, "E_INPUT_SCHEMA");
+  }
+  assert.equal(firstError(run(home, "gaps", { ...query, withinDays: 30 }, at, 1).envelope).code, "E_INPUT_SCHEMA");
+}));
+
+test("actor rule: internal spaces are stored unchanged; padding, control characters and more than 200 characters are rejected with the rule", () => isolated((home) => {
+  const rule = "Provide 1 to 200 Unicode characters with no control characters (including newlines) and no leading or trailing whitespace; spaces inside the value are allowed for actor.";
+  const rejected = [" operator", "operator ", "\toperator", "operator\n", "first\nsecond", "nul\u0000", "delete\u007f", "   ", "", "x".repeat(201)];
+  for (const actor of rejected) {
+    const result = run(home, "program add", { ...program, actor }, [], 1);
+    assert.equal(firstError(result.envelope).code, "E_INPUT_SCHEMA", JSON.stringify(actor));
+    assert.equal(firstError(result.envelope).message, "The actor field is not valid.");
+    assert.equal(firstError(result.envelope).hint, rule);
+    assert.equal(existsSync(join(home, "compliance")), false);
+  }
+  run(home, "program add", { ...program, actor: "Office Manager" });
+  run(home, "control add", { ...control, actor: "x".repeat(200) });
+  const writes = [
+    { command: "evidence add", input: { ...evidence, actor: "operator " } },
+    { command: "attest", input: { id: "attestation-a", controlId: control.id, by: "reviewer", statement: "Review confirmed", at: now, expiresAt: "2026-03-01T00:00:00Z", reason: "Routine review", actor: "line\nbreak" } },
+    { command: "doc record", input: { ...document, actor: " operator" } },
+  ];
+  for (const { command, input } of writes) assert.equal(firstError(run(home, command, input, [], 1).envelope).hint, rule);
+  const history = array(run(home, "export", query).data.history).map(object);
+  assert.deepEqual(history.map((entry) => entry.actor), ["Office Manager", "x".repeat(200)]);
+  assert.equal(run(home, "verify-chain").data.ok, true);
+}));
+
+test("no claim: documentation, skills, source and command output describe the register and never state that requirements are satisfied", () => isolated((home) => {
+  const claims = [
+    /\bcompliant\b/i, /\bnon-?compliant\b/i, /\bin (?:full )?compliance\b/i, /\bout of compliance\b/i, /\bcompliance (?:is|was|has been) (?:met|achieved|reached|confirmed)\b/i,
+    /\b(?:is|are|stays?|remains?|becomes?) certified\b/i, /\baudit[- ]ready\b/i, /\bpass(?:es|ed)? (?:an? |the )?audit\b/i,
+    /\b(?:meets?|satisf(?:y|ies)|fulfils?|fulfills?) (?:the |its |all |every |any |a )?(?:\w+ )?(?:requirements?|obligations?|regulations?|standards?|frameworks?)\b/i,
+    /\bgreen means\b[^.]*\b(?:met|satisfied|passed)\b/i,
+  ];
+  const assertNoClaim = (text: string, where: string) => {
+    for (const claim of claims) assert.doesNotMatch(text, claim, where);
+  };
+  for (const sample of ["The business is compliant.", "You are in compliance.", "This control meets the requirement.", "Green means the control is met."]) {
+    assert.ok(claims.some((claim) => claim.test(sample)), sample);
+  }
+  const root = new URL("../", import.meta.url);
+  const sources = globSync(["README.md", "**/SKILL.md", "skills/**/*", "src/**/*.ts", "migrations/*.sql", "verify/features.json"], { cwd: root, exclude: (name) => name === "node_modules" });
+  assert.ok(sources.includes("README.md") && sources.some((path) => path.endsWith("SKILL.md")));
+  for (const path of sources) assertNoClaim(readFileSync(new URL(path, root), "utf8"), path);
+  const readme = readFileSync(new URL("README.md", root), "utf8");
+  assert.match(readme, /not an opinion/);
+
+  setup(home);
+  const outputs = [run(home, "status", query).stdout, run(home, "gaps", query).stdout];
+  run(home, "evidence add", { ...longEvidence, id: "draft-a", weight: "draft" });
+  run(home, "evidence add", { ...longEvidence, id: "decision-a", weight: "decision" });
+  outputs.push(run(home, "status", query).stdout, run(home, "gaps", query).stdout);
+  run(home, "evidence add", evidence);
+  run(home, "attest", { id: "attestation-a", controlId: control.id, by: "reviewer", statement: "Review confirmed", at: now, expiresAt: "2026-12-01T00:00:00Z", ...provenance });
+  for (const input of [query, { ...query, withinDays: 400 }]) outputs.push(run(home, "status", input).stdout, run(home, "expiring", input).stdout);
+  outputs.push(run(home, "gaps", query).stdout, run(home, "commands").stdout, run(home, "selfcheck").stdout);
+  outputs.push(run(home, "program add", { ...program, id: "other", actor: " padded" }, [], 1).stdout, run(home, "status", { ...query, withinDays: -1 }, [], 1).stdout);
+  for (const [index, output] of outputs.entries()) assertNoClaim(output, `output ${index}: ${output}`);
 }));

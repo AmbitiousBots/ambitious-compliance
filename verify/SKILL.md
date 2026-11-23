@@ -49,7 +49,7 @@ A status color describes what is on record at the supplied clock. It is not an o
 
 The fixture adapter in `verify/checks/contract-module.mjs` imports the actual built bundle and runs all seven kit contract checks unchanged. Kit 0.4.9 sends `{}` to every read command while expecting a missing-database error. Five commands require fields, so the adapter supplies valid sample query fields for exactly that input. It changes no output or exit code. Direct binary tests separately require `E_INPUT_SCHEMA` for invalid read input, `E_MIGRATION` for valid input without a database, and unchanged database bytes for populated analysis. The executable checksum is also checked directly against the built file.
 
-`test/handoff.test.ts` always checks task payload fields and distinct stable keys. It checks acceptance and repeated handoff against `tasks-v0.1.0` when that GitHub release exists, after verifying the asset checksum. If the release is absent, that external check reports an explicit skip; an authentication or download error fails instead. This requires the GitHub CLI and repository access while the dependency repository is private.
+`test/handoff.test.ts` always checks task payload fields and distinct stable keys. It checks acceptance and repeated handoff against `tasks-v0.1.4` when that GitHub release exists, after verifying the asset checksum. If the release is absent, that external check reports an explicit skip; an authentication or download error fails instead. This requires the GitHub CLI and repository access while the dependency repository is private.
 
 To exercise the CLI manually, create a scratch home and keep fixed clock values.
 

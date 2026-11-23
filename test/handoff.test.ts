@@ -9,9 +9,9 @@ import { isRecord } from "@ambitious/kit/domain/json";
 
 const now = "2026-01-10T00:00:00.000Z";
 const moduleBinary = resolve("dist/ambitious-compliance.mjs");
-const releaseTag = "tasks-v0.1.0";
+const releaseTag = "tasks-v0.1.4";
 const repository = "AmbitiousBots/ambitious-tasks";
-const assetName = "ambitious-tasks-0.1.0.mjs";
+const assetName = "ambitious-tasks-0.1.4.mjs";
 
 const object = (value: unknown): Readonly<Record<string, unknown>> => {
   assert.ok(isRecord(value));

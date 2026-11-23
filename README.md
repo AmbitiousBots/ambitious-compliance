@@ -119,9 +119,9 @@ mise exec -- verify/run
 
 `release:check` runs type checking, lint, standalone documentation checks, dependency boundaries, unit and property tests, the module contract checks, TLA+/TLC, feature verification and the release build. `verify/run` checks the features in [verify/features.json](verify/features.json) using temporary data directories. It never needs real organization records.
 
-`npm run release:build` writes `release/ambitious-compliance-0.1.2.mjs` and `release/SHA256SUMS`. The bundled file runs with Node 24 alone. Development dependencies and migrations are embedded at build time; users do not run `npm install`. The kit's checksum-verifying installer can install that release. Release files are not committed.
+`npm run release:build` writes `release/ambitious-compliance-0.1.3.mjs` and `release/SHA256SUMS`. The bundled file runs with Node 24 alone. Development dependencies and migrations are embedded at build time; users do not run `npm install`. The kit's checksum-verifying installer can install that release. Release files are not committed.
 
-The optional tasks integration check uses a checksum-verified `tasks-v0.1.0` release when available. It reports a clear skip when that release has not been published, while local payload shape tests still run. See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for contributing and responsible disclosure.
+The optional tasks integration check uses a checksum-verified `tasks-v0.1.4` release when available. It reports a clear skip when that release has not been published, while local payload shape tests still run. See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for contributing and responsible disclosure.
 
 ## Formal model
 
